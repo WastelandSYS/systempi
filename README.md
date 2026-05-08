@@ -18,7 +18,7 @@
 
 DEPENDANCIES
 
-This tool is currently designed for Raspberry Pi systems, as it relies on vcgencmd for hardware-level metrics such as temperature, frequency, and throttling. It is intended for use on Raspberry Pi OS or Kali Linux running on a Pi device.
+This tool is currently designed for Raspberry Pi systems, as it relies on vcgencmd for hardware level metrics such as temperature, frequency, and throttling. It is intended for use on Raspberry Pi OS or Kali Linux running on a Pi device.
 
 It requires psutil for system monitoring (CPU, memory, disk, and network statistics). This dependency is automatically installed via install.sh.
 
@@ -29,9 +29,9 @@ Future updates may expand compatibility to non-Raspberry Pi systems where equiva
 DESCRIPTION
 
 
-systempi is a Python-based real-time system monitoring dashboard designed for Raspberry Pi devices and Kali Linux systems. It combines `vcgencmd`, `psutil`, and low-level system metrics to deliver live insights into CPU performance, temperature, memory, disk I/O, network activity, and system load.
+systempi is real time system monitoring dashboard designed for Raspberry Pi devices and Kali Linux systems written in Python. It combines `vcgencmd`, `psutil`, and low-level system metrics to deliver live insights into CPU performance, temperature, memory, disk I/O, network activity, and system load.
 
-Beyond basic monitoring, it features an advanced system health engine that calculates dynamic health, storage condition, and stability trends, along with detection of throttling and undervoltage events. The output is presented in a structured ASCII dashboard with color-coded indicators for quick visual interpretation of system state and performance.
+Beyond basic monitoring, it features an advanced system health engine that calculates dynamic health, storage condition, and stability trends, along with detection of throttling and undervoltage events. The output is presented in a structured ASCII dashboard with color coded indicators for quick visual interpretation of system state and performance.
 
 
 -------------------------------
@@ -43,15 +43,15 @@ Beyond basic monitoring, it features an advanced system health engine that calcu
 * Disk Usage (Root FS) – Overall storage consumption of the main filesystem.
 
 ⚙️ Performance & Hardware Telemetry
-* ARM CPU Frequency Monitoring – Real-time processor clock speed in Hz.
+* ARM CPU Frequency Monitoring – Real time processor clock speed in Hz.
 * Disk I/O Rates – Live read/write throughput in KiB/s (delta-based calculation).
-* System Load Average (1m / 5m / 15m) – Kernel load tracking for short and long-term system stress.
-* Uptime Tracking – System runtime displayed in human-readable format.
+* System Load Average (1m / 5m / 15m) – Kernel load tracking for short and long term system stress.
+* Uptime Tracking – System runtime displayed in readable format.
 
 🌐 Network Monitoring
 * Live Network Throughput – Sent and received bandwidth in KiB/s.
 * Automatic Network Interface Detection – Dynamically selects active interface (excluding loopback).
-* Per-Second Network Rate Calculation – Accurate delta-based bandwidth measurement over time.
+* Per-Second Network Rate Calculation – Accurate delta based bandwidth measurement over time.
 
 ⚠️ Thermal & Throttling Intelligence
 * CPU Throttling Detection – Detects active throttling events via vcgencmd.
@@ -70,17 +70,17 @@ Beyond basic monitoring, it features an advanced system health engine that calcu
 * System Stability Average – Rolling average of system health over time (trend-based stability indicator).
 
 📊 Visualization & UI Layer
-* ASCII Dashboard Interface – Real-time terminal UI with boxed layout.
-* Color-Coded Metrics System – Green / Yellow / Red scaling for all major stats.
+* ASCII Dashboard Interface – Real time terminal UI with boxed layout.
+* Color Coded Metrics System – Green / Yellow / Red scaling for all major stats.
 * Per-Core CPU Bar Visualization – Graph-style blocks showing per-core load intensity.
 * Colored Load Scaling Bars – Visual CPU intensity representation using block gradients.
 
 🧩 System Behavior & Architecture
 * Stateful Monitoring Engine – Persistent runtime state tracking (network, disk, throttling, history).
 * Delta-Based Sampling System – Accurate per-second calculations for disk and network metrics.
-* Boot-Time Tracking – Uses system boot timestamp for uptime calculation.
+* Boot time Tracking – Uses system boot timestamp for uptime calculation.
 * Graceful Terminal Cleanup – Restores cursor and clears UI cleanly on exit (Ctrl+C safe handling).
-* Real-Time Refresh Loop (1s interval) – Continuous live monitoring update cycle.
+* Real time Refresh Loop (1s interval) – Continuous live monitoring update cycle.
 -------------------------------
 
 INSTALLATION & USAGE
