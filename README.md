@@ -3,9 +3,13 @@
 # systemPI - by TheJuicePapi
 
 -------------------------------------------------------------------------------------------------------------------------------------------
-![Screenshot_2023-12-15_16-13-59](https://github.com/TheJuicePapi/systempi/assets/134894632/29b66419-4856-4a18-b057-007d0f94a5a0)
-![Screenshot_2023-12-15_16-14-22](https://github.com/TheJuicePapi/systempi/assets/134894632/014276be-1178-4102-9533-600d1b1e11d9)
-![Screenshot_2023-12-15_16-14-53](https://github.com/TheJuicePapi/systempi/assets/134894632/f989887d-dbf3-4846-a375-28ff1fd5b0de)
+<table>
+  <tr>
+    <td><img width="369" height="700" src="https://github.com/user-attachments/assets/88e96f60-f184-4e95-8c62-846d671ba775" /></td>
+    <td><img width="369" height="701" src="https://github.com/user-attachments/assets/095cdf61-c121-4474-b1f1-b0a37f63b1f4" /></td>
+  </tr>
+</table>
+
 
 
 
@@ -14,32 +18,69 @@
 
 DEPENDANCIES
 
-Right now this script is only compatible with RPI machines due to it using vcgencmd. It should work with Raspian OS or Kali linux assuming it's being run on the PI.
-(more compatibility will be coming down the road)
+This tool is currently designed for Raspberry Pi systems, as it relies on vcgencmd for hardware-level metrics such as temperature, frequency, and throttling. It is intended for use on Raspberry Pi OS or Kali Linux running on a Pi device.
 
-This script also uses psutil which will be automatically installed using install.sh.
+It requires psutil for system monitoring (CPU, memory, disk, and network statistics). This dependency is automatically installed via install.sh.
+
+Future updates may expand compatibility to non-Raspberry Pi systems where equivalent hardware metrics are available.
 
 -------------------------------
 
 DESCRIPTION
 
-systempi is a Python script designed to provide real time monitoring of key system metrics on Raspberry Pi devices/Kali Pis. The script utilizes various tools, including vcgencmd and psutil, to retrieve and display the system stats for you. The script's output is presented in a clear and visually appealing format, with some color changing indicators to highlight critical values. It offers users a comprehensive view of their Raspberry Pi's performance, aiding in the assessment of resource utilization and system health.
+
+systempi is a Python-based real-time system monitoring dashboard designed for Raspberry Pi devices and Kali Linux systems. It combines `vcgencmd`, `psutil`, and low-level system metrics to deliver live insights into CPU performance, temperature, memory, disk I/O, network activity, and system load.
+
+Beyond basic monitoring, it features an advanced system health engine that calculates dynamic health, storage condition, and stability trends, along with detection of throttling and undervoltage events. The output is presented in a structured ASCII dashboard with color-coded indicators for quick visual interpretation of system state and performance.
+
 
 -------------------------------
+🧠 Core System Monitoring
+* CPU Load (Per-Core + Average) – Real-time overall CPU usage plus individual core activity visualization.
+* CPU Temperature Monitoring – Live temperature reading from vcgencmd with warning and critical thresholds.
+* Memory Usage (RAM) – Percentage of system RAM currently in use.
+* Swap Usage – Tracks swap memory utilization for pressure detection.
+* Disk Usage (Root FS) – Overall storage consumption of the main filesystem.
 
-Features
+⚙️ Performance & Hardware Telemetry
+* ARM CPU Frequency Monitoring – Real-time processor clock speed in Hz.
+* Disk I/O Rates – Live read/write throughput in KiB/s (delta-based calculation).
+* System Load Average (1m / 5m / 15m) – Kernel load tracking for short and long-term system stress.
+* Uptime Tracking – System runtime displayed in human-readable format.
 
-1. CPU Load: Percentage of CPU usage.
-2. CPU Temperature: Temperature of the CPU in degrees Celsius.
-3. Memory Usage: Percentage of RAM usage.
-4. Disk Usage: Percentage of disk space usage on the root file system.
-5. Disk Read and Write Rates: Disk I/O rates in kilobytes per second.
-6. ARM Frequency: Clock frequency of the ARM processor in Hertz.
-7. Uptime: Total time the system has been running, displayed in hours, minutes, and seconds.
-8. Load Average: Three load average values for the last 1, 5, and 15 minutes.
-9. Swap Usage: Percentage of swap space usage.
-10. Network Usage: Data transfer rates in kilobytes per second for both sent and received data. Total data transferred in kilobytes.
+🌐 Network Monitoring
+* Live Network Throughput – Sent and received bandwidth in KiB/s.
+* Automatic Network Interface Detection – Dynamically selects active interface (excluding loopback).
+* Per-Second Network Rate Calculation – Accurate delta-based bandwidth measurement over time.
 
+⚠️ Thermal & Throttling Intelligence
+* CPU Throttling Detection – Detects active throttling events via vcgencmd.
+* Undervoltage Detection – Identifies power instability conditions.
+* Frequency Capping Detection – Flags performance limiting states.
+* Throttling Event Latch (History Tracking) – Remembers if throttling has ever occurred during runtime (persistent state flag).
+
+🧮 System Health Engine (Advanced)
+* System Health Score (0–100) – Dynamic weighted scoring system based on:
+* CPU pressure
+* Temperature stress
+* Memory usage
+* Disk usage
+* Throttling / undervoltage events
+* Storage Health Score – Separate health metric based on disk usage + write intensity.
+* System Stability Average – Rolling average of system health over time (trend-based stability indicator).
+
+📊 Visualization & UI Layer
+* ASCII Dashboard Interface – Real-time terminal UI with boxed layout.
+* Color-Coded Metrics System – Green / Yellow / Red scaling for all major stats.
+* Per-Core CPU Bar Visualization – Graph-style blocks showing per-core load intensity.
+* Colored Load Scaling Bars – Visual CPU intensity representation using block gradients.
+
+🧩 System Behavior & Architecture
+* Stateful Monitoring Engine – Persistent runtime state tracking (network, disk, throttling, history).
+* Delta-Based Sampling System – Accurate per-second calculations for disk and network metrics.
+* Boot-Time Tracking – Uses system boot timestamp for uptime calculation.
+* Graceful Terminal Cleanup – Restores cursor and clears UI cleanly on exit (Ctrl+C safe handling).
+* Real-Time Refresh Loop (1s interval) – Continuous live monitoring update cycle.
 -------------------------------
 
 INSTALLATION & USAGE
@@ -56,4 +97,4 @@ Git clone installation:
  
 -------------------------------
 
-This script has been tested on an RPI 4b running a kali linux arm.
+This script was made and tested on an RPI 4b running a kali linux arm.
