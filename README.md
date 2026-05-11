@@ -1,19 +1,20 @@
+<img width="1536" height="1024" alt="ChatGPT Image May 11, 2026, 02_27_38 AM" src="https://github.com/user-attachments/assets/68aa4f63-39bb-4a64-9d70-c4f5f8f81fb8" />
+
+
 -------------------------------------------------------------------------------------------------------------------------------------------
 
-# systemPI - by TheJuicePapi
 
--------------------------------------------------------------------------------------------------------------------------------------------
 <table>
   <tr>
-    <td><img width="369" height="700" src="https://github.com/user-attachments/assets/88e96f60-f184-4e95-8c62-846d671ba775" /></td>
-    <td><img width="369" height="701" src="https://github.com/user-attachments/assets/095cdf61-c121-4474-b1f1-b0a37f63b1f4" /></td>
+    <td><img width="475" height="860" src="https://github.com/user-attachments/assets/88e96f60-f184-4e95-8c62-846d671ba775" /></td>
+    <td><img width="475" height="860" src="https://github.com/user-attachments/assets/095cdf61-c121-4474-b1f1-b0a37f63b1f4" /></td>
   </tr>
 </table>
 
 
 
 
-------------------------------
+
 
 
 DEPENDANCIES
