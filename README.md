@@ -5,8 +5,7 @@
 
 <table>
   <tr>
-    <td><img width="475" height="860" src="https://github.com/user-attachments/assets/88e96f60-f184-4e95-8c62-846d671ba775" /></td>
-    <td><img width="475" height="860" src="https://github.com/user-attachments/assets/095cdf61-c121-4474-b1f1-b0a37f63b1f4" /></td>
+  <img width="1050" height="700" alt="systempi-v2 1-1 (1)" src="https://github.com/user-attachments/assets/c77a9edd-34a6-4f7b-9eb9-68d6609d6928" />
   </tr>
 </table>
 
@@ -90,7 +89,7 @@ Git clone installation:
 
 1. 'git clone https://github.com/TheJuicePapi/systempi.git'
 2. 'cd systempi'
-3. 'sudo chmod +x install.sh systempi.py'
+3. 'chmod +x install.sh systempi.py'
 4. 'sudo ./install.sh'
 5. Exit and open a new terminal to use 'systempi' shortcut
 
