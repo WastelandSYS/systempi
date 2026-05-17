@@ -5,8 +5,8 @@
 
 <table>
   <tr>
-  <img width="1050" height="700" alt="systempi-v2 1-1 (1)" src="https://github.com/user-attachments/assets/c77a9edd-34a6-4f7b-9eb9-68d6609d6928" />
-  </tr>
+<img width="828" height="662" alt="systempi101" src="https://github.com/user-attachments/assets/be4ac555-3395-4379-ad7c-2addd471b192" />
+ </tr>
 </table>
 
 
