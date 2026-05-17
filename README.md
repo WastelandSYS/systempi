@@ -87,7 +87,7 @@ INSTALLATION & USAGE
 
 Git clone installation:
 
-1. 'git clone https://github.com/TheJuicePapi/systempi.git'
+1. 'git clone https://github.com/WastelandSYS/systempi.git'
 2. 'cd systempi'
 3. 'chmod +x install.sh systempi.py'
 4. 'sudo ./install.sh'
