@@ -452,6 +452,8 @@ def render_dashboard(metrics, state):
         lines.append(metric_row("Occurred", "YES" if state.throttle_occurred_latch else "NO", color=occurred_color, width=width))
         lines.append(metric_row("Undervoltage", "YES" if throttle["undervoltage"] else "NO", color=undervolt_color, width=width))
 
+    trend = sparkline(state.health_history, width=24 if width >= 86 else 16)
+    lines.append(panel_line(f"Health Trend{' ' * 22}{trend}", width))
     health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
     lines.append(metric_row(
         "System Health",
@@ -482,8 +484,6 @@ def render_dashboard(metrics, state):
         color=stability_badge[1],
         width=width,
     ))
-    trend = sparkline(state.health_history, width=24 if width >= 86 else 16)
-    lines.append(panel_line(f"Health Trend{' ' * 22}{trend}", width))
     lines.append("╰" + "─" * (width - 0) + "╯")
 
     return "\n".join(lines)
