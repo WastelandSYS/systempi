@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import psutil
 
@@ -74,8 +75,7 @@ def get_pi_stats():
 
         return temperature, frequency, throttle
 
-    except Exception as e:
-        print(f"Error retrieving Pi stats: {e}")
+    except Exception:
         return None, None, None
 
 def get_network_usage(state):
@@ -121,8 +121,7 @@ def get_network_usage(state):
 
         return sent, recv
 
-    except Exception as e:
-        print(f"Error retrieving network usage: {e}")
+    except Exception:
         return 0.0, 0.0
 
 def get_disk_io(state):
@@ -155,8 +154,7 @@ def get_disk_io(state):
 
         return read, write
 
-    except Exception as e:
-        print(f"Error retrieving disk I/O stats: {e}")
+    except Exception:
         return 0.0, 0.0
 
 def get_system_load_average():
@@ -230,9 +228,53 @@ def sparkline(values, width=24):
     color = severity_color(avg, 80, 50, inverse=True)
     return colorize("".join(points), color)
 
-def cleanup_terminal():
-    print("\033[?25h", end="")      # restore cursor
-    print("\033[H\033[J", end="", flush=True)    # clear screen
+class TerminalRenderer:
+    def __init__(self):
+        self.previous_lines = []
+        self.enabled = sys.stdout.isatty()
+
+    def start(self):
+        if not self.enabled:
+            return
+        # Alternate screen + hidden cursor keeps the shell scrollback stable and
+        # avoids repainting over the user's prompt while the dashboard is live.
+        sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J")
+        sys.stdout.flush()
+
+    def render(self, frame):
+        if not self.enabled:
+            print(frame, flush=True)
+            return
+
+        lines = frame.splitlines()
+        output = []
+
+        # Only redraw lines that changed. This keeps terminal writes small and
+        # avoids the visible flash caused by clearing/repainting the full screen.
+        for index, line in enumerate(lines):
+            if index >= len(self.previous_lines) or line != self.previous_lines[index]:
+                output.append(f"\033[{index + 1};1H\033[2K{line}")
+
+        for index in range(len(lines), len(self.previous_lines)):
+            output.append(f"\033[{index + 1};1H\033[2K")
+
+        if output:
+            sys.stdout.write("".join(output))
+            sys.stdout.flush()
+
+        self.previous_lines = lines
+
+    def stop(self):
+        if not self.enabled:
+            return
+        sys.stdout.write("\033[?25h\033[?1049l")
+        sys.stdout.flush()
+
+def cleanup_terminal(renderer=None):
+    if renderer:
+        renderer.stop()
+    else:
+        print("\033[?25h", end="", flush=True)      # restore cursor
 
 def get_swap_usage():
     try:
@@ -494,88 +536,90 @@ def format_uptime(seconds):
     secs = int(seconds % 60)
     return f"{hours}h {minutes}m {secs}s"
 
+def collect_metrics(state, boot_time):
+    temperature, frequency, throttle = get_pi_stats()
+    mem_percent = psutil.virtual_memory().percent
+    core_loads = psutil.cpu_percent(interval=None, percpu=True)
+
+    if core_loads:
+        cpu_load = sum(core_loads) / len(core_loads)
+    else:
+        cpu_load = 0.0
+    disk_usage = psutil.disk_usage('/').percent  # Monitor root disk usage
+    disk_read_per_sec, disk_write_per_sec = get_disk_io(state)
+    network_sent_per_sec, network_recv_per_sec = get_network_usage(state)
+    system_load_avg = get_system_load_average()
+    swap_percent = get_swap_usage()
+
+    system_health = calculate_system_health(
+        cpu_load,
+        temperature,
+        mem_percent,
+        disk_usage,
+        throttle
+    )
+
+    state.health_history.append(system_health)
+
+    if len(state.health_history) > 60:
+        state.health_history.pop(0)
+
+    system_stability = (
+        sum(state.health_history) / len(state.health_history)
+        if state.health_history else 100
+    )
+    storage_health = calculate_storage_health(
+        disk_usage,
+        disk_write_per_sec
+    )
+
+    if throttle and (
+        throttle.get("throttled")
+        or throttle.get("undervoltage")
+        or throttle.get("freq_capped")
+        or throttle.get("throttling_occurred")
+    ):
+        state.throttle_occurred_latch = True
+
+    return {
+        "temperature": temperature,
+        "frequency": frequency,
+        "throttle": throttle,
+        "mem_percent": mem_percent,
+        "core_loads": core_loads,
+        "cpu_load": cpu_load,
+        "disk_usage": disk_usage,
+        "disk_read_per_sec": disk_read_per_sec,
+        "disk_write_per_sec": disk_write_per_sec,
+        "network_sent_per_sec": network_sent_per_sec,
+        "network_recv_per_sec": network_recv_per_sec,
+        "network_interface": state.network_interface,
+        "load_avg": system_load_avg,
+        "swap_percent": swap_percent,
+        "system_health": system_health,
+        "system_stability": system_stability,
+        "storage_health": storage_health,
+        "uptime": format_uptime(time.time() - boot_time),
+    }
+
 def main():
     boot_time = psutil.boot_time()
     state = SystemState()
+    renderer = TerminalRenderer()
 
     psutil.cpu_percent(interval=None)
-    print("\033[?25l", end="", flush=True)  # hide cursor while dashboard is active
+    renderer.start()
 
-    while True:
-        temperature, frequency, throttle = get_pi_stats()
-        mem_percent = psutil.virtual_memory().percent
-        core_loads = psutil.cpu_percent(interval=None, percpu=True)
-
-        if core_loads:
-            cpu_load = sum(core_loads) / len(core_loads)
-        else:
-            cpu_load = 0.0
-        disk_usage = psutil.disk_usage('/').percent  # Monitor root disk usage
-        disk_read_per_sec, disk_write_per_sec = get_disk_io(state)
-        network_sent_per_sec, network_recv_per_sec = get_network_usage(state)
-        system_load_avg = get_system_load_average()
-        swap_percent = get_swap_usage()
-
-        system_health = calculate_system_health(
-            cpu_load,
-            temperature,
-            mem_percent,
-            disk_usage,
-            throttle
-        )
-
-        state.health_history.append(system_health)
-
-        if len(state.health_history) > 60:
-            state.health_history.pop(0)
-
-        system_stability = (
-            sum(state.health_history) / len(state.health_history)
-            if state.health_history else 100
-        )
-        storage_health = calculate_storage_health(
-            disk_usage,
-            disk_write_per_sec
-        )
-
-        if throttle and (
-            throttle.get("throttled")
-            or throttle.get("undervoltage")
-            or throttle.get("freq_capped")
-            or throttle.get("throttling_occurred")
-        ):
-            state.throttle_occurred_latch = True
-
-        metrics = {
-            "temperature": temperature,
-            "frequency": frequency,
-            "throttle": throttle,
-            "mem_percent": mem_percent,
-            "core_loads": core_loads,
-            "cpu_load": cpu_load,
-            "disk_usage": disk_usage,
-            "disk_read_per_sec": disk_read_per_sec,
-            "disk_write_per_sec": disk_write_per_sec,
-            "network_sent_per_sec": network_sent_per_sec,
-            "network_recv_per_sec": network_recv_per_sec,
-            "network_interface": state.network_interface,
-            "load_avg": system_load_avg,
-            "swap_percent": swap_percent,
-            "system_health": system_health,
-            "system_stability": system_stability,
-            "storage_health": storage_health,
-            "uptime": format_uptime(time.time() - boot_time),
-        }
-
-        print("\033[H\033[J", end="", flush=True)
-        print(render_dashboard(metrics, state), flush=True)
-
-        time.sleep(1)
+    try:
+        while True:
+            metrics = collect_metrics(state, boot_time)
+            renderer.render(render_dashboard(metrics, state))
+            time.sleep(1)
+    finally:
+        cleanup_terminal(renderer)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
         pass
-    finally:
-        cleanup_terminal()
