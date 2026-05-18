@@ -93,7 +93,19 @@ Git clone installation:
 4. 'sudo ./install.sh'
 5. Exit and open a new terminal to use 'systempi' shortcut
 
- 
+
+ UNINSTALLATION:
+
+1. 'cd systempi'
+2. 'chmod +x uninstall.sh'
+3. 'sudo ./uninstall.sh'
+
+
+Optional dependency cleanup:
+
+* 'sudo ./uninstall.sh --remove-deps'
+
+The uninstaller removes the global 'systempi' shortcut from '/usr/local/bin'. It does not delete your cloned repository folder.
 -------------------------------
 
 This script was made and tested on an RPI 4b running a kali linux arm.
