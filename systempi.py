@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 import re
 import shutil
 import subprocess
 import sys
 import time
+
 import psutil
 
 # Constants
@@ -14,17 +16,93 @@ TEMP_CRITICAL = 75
 CPU_THRESHOLD_LOW = 60
 CPU_THRESHOLD_MEDIUM = 85
 RESET = "\033[0m"
-COLORS = {
-    "green": "\033[92m",
-    "yellow": "\033[93m",
-    "red": "\033[91m",
-    "cyan": "\033[96m",
-    "blue": "\033[94m",
-    "magenta": "\033[95m",
-    "white": "\033[97m",
-    "bold_cyan": "\033[96;1m",
-    "dim": "\033[2m",
+
+THEMES = {
+    "default": {
+        "green": "\033[92m",
+        "yellow": "\033[93m",
+        "red": "\033[91m",
+        "cyan": "\033[96m",
+        "blue": "\033[94m",
+        "magenta": "\033[95m",
+        "white": "\033[97m",
+        "bold_cyan": "\033[96;1m",
+        "dim": "\033[2m",
+    },
+    "girly": {
+        "green": "\033[95m",
+        "yellow": "\033[97m",
+        "red": "\033[91m",
+        "cyan": "\033[95m",
+        "blue": "\033[38;5;219m",
+        "magenta": "\033[38;5;213m",
+        "white": "\033[97m",
+        "bold_cyan": "\033[95;1m",
+        "dim": "\033[2m",
+    },
+    "wasteland": {
+        "green": "\033[38;5;148m",
+        "yellow": "\033[38;5;179m",
+        "red": "\033[38;5;203m",
+        "cyan": "\033[38;5;180m",
+        "blue": "\033[38;5;109m",
+        "magenta": "\033[38;5;137m",
+        "white": "\033[38;5;223m",
+        "bold_cyan": "\033[38;5;186;1m",
+        "dim": "\033[2m",
+    },
+    "ocean": {
+        "green": "\033[38;5;86m",
+        "yellow": "\033[38;5;117m",
+        "red": "\033[38;5;203m",
+        "cyan": "\033[38;5;51m",
+        "blue": "\033[38;5;39m",
+        "magenta": "\033[38;5;99m",
+        "white": "\033[97m",
+        "bold_cyan": "\033[38;5;51;1m",
+        "dim": "\033[2m",
+    },
+    "matrix": {
+        "green": "\033[38;5;46m",
+        "yellow": "\033[38;5;118m",
+        "red": "\033[38;5;196m",
+        "cyan": "\033[38;5;82m",
+        "blue": "\033[38;5;40m",
+        "magenta": "\033[38;5;34m",
+        "white": "\033[38;5;120m",
+        "bold_cyan": "\033[38;5;46;1m",
+        "dim": "\033[2m",
+    },
+    "lava": {
+        "green": "\033[38;5;208m",
+        "yellow": "\033[38;5;220m",
+        "red": "\033[38;5;196m",
+        "cyan": "\033[38;5;202m",
+        "blue": "\033[38;5;130m",
+        "magenta": "\033[38;5;166m",
+        "white": "\033[38;5;230m",
+        "bold_cyan": "\033[38;5;214;1m",
+        "dim": "\033[38;5;240m",
+    },
+    "mono": {
+        "green": "\033[97m",
+        "yellow": "\033[37m",
+        "red": "\033[1;97m",
+        "cyan": "\033[37m",
+        "blue": "\033[90m",
+        "magenta": "\033[97m",
+        "white": "\033[97m",
+        "bold_cyan": "\033[1;97m",
+        "dim": "\033[2m",
+    },
 }
+
+COLORS = THEMES["default"].copy()
+
+
+def apply_theme(theme_name):
+    global COLORS
+    COLORS = THEMES.get(theme_name, THEMES["default"]).copy()
 
 class SystemState:
     def __init__(self):
@@ -42,7 +120,9 @@ def run_vcgencmd(args):
     try:
         return subprocess.check_output(
             ["vcgencmd"] + args,
-            text=True
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
         ).strip()
     except Exception:
         return None
@@ -67,10 +147,14 @@ def get_pi_stats():
         value = int(parts[1], 16) if len(parts) > 1 else 0
 
         throttle = {
-            "throttled": bool(value & 0x1),
+            "undervoltage": bool(value & 0x1),
             "freq_capped": bool(value & 0x2),
-            "undervoltage": bool(value & 0x10000),
-            "throttling_occurred": bool(value & 0x20000)
+            "throttled": bool(value & 0x4),
+            "soft_temp_limit": bool(value & 0x8),
+            "undervoltage_occurred": bool(value & 0x10000),
+            "freq_capped_occurred": bool(value & 0x20000),
+            "throttling_occurred": bool(value & 0x40000),
+            "soft_temp_limit_occurred": bool(value & 0x80000),
         }
 
         return temperature, frequency, throttle
@@ -232,6 +316,7 @@ class TerminalRenderer:
     def __init__(self):
         self.previous_lines = []
         self.enabled = sys.stdout.isatty()
+        self.last_terminal_size = None
 
     def start(self):
         if not self.enabled:
@@ -246,8 +331,14 @@ class TerminalRenderer:
             print(frame, flush=True)
             return
 
+        current_size = shutil.get_terminal_size((88, 24))
         lines = frame.splitlines()
         output = []
+
+        if current_size != self.last_terminal_size:
+            output.append("\033[H\033[2J")
+            self.previous_lines = []
+            self.last_terminal_size = current_size
 
         # Only redraw lines that changed. This keeps terminal writes small and
         # avoids the visible flash caused by clearing/repainting the full screen.
@@ -316,6 +407,49 @@ def get_cpu_cores():
     except Exception:
         return []
 
+def health_explainability(cpu, temp, mem, disk, throttle):
+    reasons = []
+    if cpu > 80:
+        reasons.append(f"CPU pressure {cpu:.1f}%")
+    if temp is not None and temp > TEMP_WARNING:
+        reasons.append(f"Temp high {temp:.1f}C")
+    if mem > 80:
+        reasons.append(f"RAM high {mem:.1f}%")
+    if disk > 90:
+        reasons.append(f"Disk near full {disk:.1f}%")
+    if throttle and throttle.get("throttled"):
+        reasons.append("Active throttling")
+    if throttle and throttle.get("undervoltage"):
+        reasons.append("Undervoltage detected")
+    if throttle and throttle.get("freq_capped"):
+        reasons.append("Frequency capped")
+    return reasons[:3]
+
+
+def render_health_why_line(health_why_reasons, width):
+    def color_reason(reason):
+        reason_lower = reason.lower()
+        if "undervoltage" in reason_lower or "throttling" in reason_lower:
+            return colorize(reason, "red")
+        if "temp" in reason_lower or "cpu" in reason_lower:
+            return colorize(reason, "yellow")
+        if "ram" in reason_lower or "disk" in reason_lower or "freq" in reason_lower:
+            return colorize(reason, "magenta")
+        return colorize(reason, "white")
+
+    if health_why_reasons:
+        colored_reasons = [color_reason(reason) for reason in health_why_reasons]
+        bullets = colorize(" • ", "dim").join(colored_reasons)
+
+        label = colorize(f"{'Health Why:':<14}", "bold_cyan")
+        text = f"{label}{bullets}"
+
+    else:
+        label = colorize(f"{'Health Why:':<14}", "bold_cyan")
+        text = f"{label}{colorize('All systems stable', 'green')}"
+
+    return panel_line(truncate_display(text, width - 4), width)
+
 def calculate_storage_health(disk_usage, write_rate):
     health = 100
 
@@ -368,7 +502,7 @@ def metric_row(label, value, unit="", bar=None, badge=None, color=None, width=72
     return panel_line(truncate_display(content, width - 4), width)
 
 def section_title(title, width):
-    return panel_line(colorize(title, "bold_cyan"), width)
+    return panel_line(truncate_display(colorize(title, "bold_cyan"), width - 4), width)
 
 def format_frequency(frequency):
     if frequency is None:
@@ -388,17 +522,44 @@ def render_core_line(core_loads, width):
     content = f"CPU Cores{' ' * 11}" + "  ".join(core_parts)
     return panel_line(truncate_display(content, width - 4), width)
 
-def render_dashboard(metrics, state):
+VARIATIONS = {
+    "balanced": {"compact": False, "show_cores": True, "show_io_details": True, "show_net_details": True},
+    "compact": {"compact": True, "show_cores": False, "show_io_details": False, "show_net_details": False},
+    "minimal": {"compact": True, "show_cores": False, "show_io_details": False, "show_net_details": False},
+    "insight": {"compact": False, "show_cores": True, "show_io_details": True, "show_net_details": True},
+}
+
+
+def resolve_view_config(args):
+    view = VARIATIONS[args.variation].copy()
+    if args.compact:
+        view["compact"] = True
+    return view
+
+
+def render_dashboard(metrics, state, view):
     terminal_width = shutil.get_terminal_size((88, 24)).columns
-    width = max(72, min(terminal_width, 86))
-    bar_width = 18 if width < 86 else 24
+    compact = view["compact"] or terminal_width < 72
+    max_width = 78 if compact else 86
+    width = min(max(2, terminal_width - 2), max_width)
+    preferred_bar_width = 16 if compact else (20 if width < 86 else 28)
+    max_bar_width = max(4, width - 46)
+    bar_width = max(4, min(preferred_bar_width, max_bar_width))
+    effective_view = view.copy()
+
+    if width < 72:
+        effective_view["show_cores"] = False
+    if width < 64:
+        effective_view["show_io_details"] = False
+        effective_view["show_net_details"] = False
 
     lines = []
     lines.append("╭" + "─" * (width - 0) + "╮")
     title = colorize("SYSTEMPI v2.1 Dashboard", "bold_cyan")
     subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: 1s"
     title_padding = max(1, width - 4 - len(strip_ansi(title)) - len(subtitle))
-    lines.append(panel_line(f"{title}{' ' * title_padding}{COLORS['dim']}{subtitle}{RESET}", width))
+    header = f"{title}{' ' * title_padding}{COLORS['dim']}{subtitle}{RESET}"
+    lines.append(panel_line(truncate_display(header, width - 4), width))
     lines.append(divider(width))
 
     lines.append(section_title("CPU / THERMAL", width))
@@ -412,7 +573,8 @@ def render_dashboard(metrics, state):
         color=cpu_badge[1],
         width=width,
     ))
-    lines.append(render_core_line(metrics["core_loads"], width))
+    if effective_view["show_cores"]:
+        lines.append(render_core_line(metrics["core_loads"], width))
 
     if metrics["temperature"] is None:
         lines.append(metric_row("CPU Temp", "N/A", width=width))
@@ -470,32 +632,39 @@ def render_dashboard(metrics, state):
         color=disk_badge[1],
         width=width,
     ))
-    lines.append(metric_row("Disk Read", f"{metrics['disk_read_per_sec']:.2f}", "KiB/s", color="magenta", width=width))
-    lines.append(metric_row("Disk Write", f"{metrics['disk_write_per_sec']:.2f}", "KiB/s", color="magenta", width=width))
+    if effective_view["show_io_details"]:
+        lines.append(metric_row("Disk Read", f"{metrics['disk_read_per_sec']:.2f}", "KiB/s", color="magenta", width=width))
+        lines.append(metric_row("Disk Write", f"{metrics['disk_write_per_sec']:.2f}", "KiB/s", color="magenta", width=width))
 
     lines.append(divider(width))
     lines.append(section_title("NETWORK", width))
-    lines.append(metric_row("Sent", f"{metrics['network_sent_per_sec']:.2f}", "KiB/s", color="white", width=width))
-    lines.append(metric_row("Received", f"{metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
-    lines.append(metric_row("Total", f"{metrics['network_sent_per_sec'] + metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
+    if effective_view["show_net_details"]:
+        lines.append(metric_row("Sent", f"{metrics['network_sent_per_sec']:.2f}", "KiB/s", color="white", width=width))
+        lines.append(metric_row("Received", f"{metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
+    lines.append(metric_row("Net Total", f"{metrics['network_sent_per_sec'] + metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
 
     lines.append(divider(width))
     lines.append(section_title("POWER / HEALTH", width))
     throttle = metrics["throttle"]
     if throttle is None:
         lines.append(metric_row("Throttled", "N/A", width=width))
+        lines.append(metric_row("Freq Capped", "N/A", width=width))
         lines.append(metric_row("Occurred", "N/A", width=width))
         lines.append(metric_row("Undervoltage", "N/A", width=width))
     else:
         throttle_color = "red" if throttle["throttled"] else "green"
+        freq_capped_color = "yellow" if throttle["freq_capped"] else "green"
         occurred_color = "red" if state.throttle_occurred_latch else "green"
         undervolt_color = "red" if throttle["undervoltage"] else "green"
         lines.append(metric_row("Throttled", "YES" if throttle["throttled"] else "NO", color=throttle_color, width=width))
+        lines.append(metric_row("Freq Capped", "YES" if throttle["freq_capped"] else "NO", color=freq_capped_color, width=width))
         lines.append(metric_row("Occurred", "YES" if state.throttle_occurred_latch else "NO", color=occurred_color, width=width))
         lines.append(metric_row("Undervoltage", "YES" if throttle["undervoltage"] else "NO", color=undervolt_color, width=width))
 
-    trend = sparkline(state.health_history, width=24 if width >= 86 else 16)
-    lines.append(panel_line(f"Health Trend{' ' * 22}{trend}", width))
+    preferred_trend_width = 20 if width < 86 else 28
+    trend_width = max(4, min(preferred_trend_width, width - 22))
+    trend = sparkline(state.health_history, width=trend_width)
+    lines.append(panel_line(truncate_display(f"Health Trend{' ' * 22}{trend}", width - 4), width))
     health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
     lines.append(metric_row(
         "System Health",
@@ -517,6 +686,7 @@ def render_dashboard(metrics, state):
         width=width,
     ))
     stability_badge = status_badge(metrics["system_stability"], 80, 50, inverse=True)
+    lines.append(render_health_why_line(metrics["health_why"], width))
     lines.append(metric_row(
         "Stability Avg",
         f"{metrics['system_stability']:.1f}",
@@ -577,7 +747,11 @@ def collect_metrics(state, boot_time):
         throttle.get("throttled")
         or throttle.get("undervoltage")
         or throttle.get("freq_capped")
+        or throttle.get("soft_temp_limit")
+        or throttle.get("undervoltage_occurred")
+        or throttle.get("freq_capped_occurred")
         or throttle.get("throttling_occurred")
+        or throttle.get("soft_temp_limit_occurred")
     ):
         state.throttle_occurred_latch = True
 
@@ -600,9 +774,20 @@ def collect_metrics(state, boot_time):
         "system_stability": system_stability,
         "storage_health": storage_health,
         "uptime": format_uptime(time.time() - boot_time),
+        "health_why": health_explainability(cpu_load, temperature, mem_percent, disk_usage, throttle),
     }
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="systempi realtime dashboard")
+    parser.add_argument("--compact", action="store_true", help="smaller layout for narrow terminals")
+    parser.add_argument("--theme", choices=sorted(THEMES.keys()), default="default", help="color theme")
+    parser.add_argument("--variation", choices=sorted(VARIATIONS.keys()), default="balanced", help="dashboard layout variation")
+    return parser.parse_args()
+
 def main():
+    args = parse_args()
+    apply_theme(args.theme)
+    view = resolve_view_config(args)
     boot_time = psutil.boot_time()
     state = SystemState()
     renderer = TerminalRenderer()
@@ -613,7 +798,7 @@ def main():
     try:
         while True:
             metrics = collect_metrics(state, boot_time)
-            renderer.render(render_dashboard(metrics, state))
+            renderer.render(render_dashboard(metrics, state, view=view))
             time.sleep(1)
     finally:
         cleanup_terminal(renderer)
