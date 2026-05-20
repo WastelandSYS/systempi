@@ -104,14 +104,21 @@ def apply_theme(theme_name):
     global COLORS
     COLORS = THEMES.get(theme_name, THEMES["default"]).copy()
 
+
+def disable_colors():
+    global COLORS, RESET
+    COLORS = {key: "" for key in THEMES["default"].keys()}
+    RESET = ""
+
 class SystemState:
-    def __init__(self):
+    def __init__(self, interface=None):
         self.prev_sent = 0
         self.prev_recv = 0
         self.prev_disk_read = 0
         self.prev_disk_write = 0
         self.health_history = []
-        self.network_interface = None
+        self.network_interface = interface
+        self.interface_locked = interface is not None
         self.last_net_time = time.time()
         self.last_disk_time = time.time()
         self.throttle_occurred_latch = False
@@ -166,21 +173,26 @@ def get_network_usage(state):
     try:
         net = psutil.net_io_counters(pernic=True)
 
-        # Select interface once (avoid lo)
-        if state.network_interface is None:
-            for iface, stats in net.items():
-                if iface != "lo" and (stats.bytes_sent > 0 or stats.bytes_recv > 0):
-                    state.network_interface = iface
-                    break
-
-        if not state.network_interface or state.network_interface not in net:
-            candidates = [(iface, s.bytes_sent + s.bytes_recv) for iface, s in net.items() if iface != "lo"]
-            if not candidates:
+        if state.interface_locked:
+            if state.network_interface not in net:
                 return 0.0, 0.0
+            stats = net[state.network_interface]
+        else:
+            # Select interface once (avoid lo)
+            if state.network_interface is None:
+                for iface, stats in net.items():
+                    if iface != "lo" and (stats.bytes_sent > 0 or stats.bytes_recv > 0):
+                        state.network_interface = iface
+                        break
 
-            state.network_interface = max(candidates, key=lambda x: x[1])[0]
+            if not state.network_interface or state.network_interface not in net:
+                candidates = [(iface, s.bytes_sent + s.bytes_recv) for iface, s in net.items() if iface != "lo"]
+                if not candidates:
+                    return 0.0, 0.0
 
-        stats = net[state.network_interface]
+                state.network_interface = max(candidates, key=lambda x: x[1])[0]
+
+            stats = net[state.network_interface]
 
         if state.prev_sent == 0 and state.prev_recv == 0:
             state.prev_sent = stats.bytes_sent
@@ -635,10 +647,10 @@ def choose_trend_width(width, mode):
         preferred = 20 if width < 86 else 28
     return max(4, min(preferred, width - 22))
 
-def render_top_panel(lines, width, metrics):
+def render_top_panel(lines, width, metrics, refresh_interval):
     lines.append("╭" + "─" * (width - 0) + "╮")
     title = colorize("SYSTEMPI v2.1 Dashboard", "bold_cyan")
-    subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: 1s"
+    subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: {refresh_interval:g}s"
     title_padding = max(1, width - 4 - len(strip_ansi(title)) - len(subtitle))
     header = f"{title}{' ' * title_padding}{COLORS['dim']}{subtitle}{RESET}"
     lines.append(panel_line(truncate_display(header, width - 4), width))
@@ -718,7 +730,7 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
     lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], 2), width))
     lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Compact snapshot", "dim"), width))
 
-def render_dashboard(metrics, state, view):
+def render_dashboard(metrics, state, view, refresh_interval):
     terminal_width = shutil.get_terminal_size((88, 24)).columns
     compact = view["compact"] or terminal_width < 72
     if view.get("mode") == "minimal":
@@ -738,7 +750,7 @@ def render_dashboard(metrics, state, view):
         effective_view["show_net_details"] = False
 
     lines = []
-    render_top_panel(lines, width, metrics)
+    render_top_panel(lines, width, metrics, refresh_interval)
     if view.get("mode") == "minimal":
         render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_view)
         lines.append("╰" + "─" * (width - 0) + "╯")
@@ -963,6 +975,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="systempi realtime dashboard")
     parser.add_argument("--compact", action="store_true", help="smaller layout for narrow terminals")
     parser.add_argument("--theme", choices=sorted(THEMES.keys()), default="default", help="color theme")
+    parser.add_argument("--refresh", type=float, default=1.0, help="refresh interval in seconds (example: 0.5)")
+    parser.add_argument("--interface", help="network interface to monitor (example: eth0, wlan0)")
+    parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
+    parser.add_argument("--once", action="store_true", help="render one snapshot and exit")
     parser.add_argument(
         "--variation",
         choices=sorted(VARIATIONS.keys()),
@@ -972,26 +988,64 @@ def parse_args():
             "compact (same style, smaller terminal friendly), minimal (clean essential-only mode)"
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.refresh <= 0:
+        parser.error("--refresh must be greater than 0")
+    return args
 
 def main():
     args = parse_args()
-    apply_theme(args.theme)
+
+    if args.no_color:
+        disable_colors()
+    else:
+        apply_theme(args.theme)
+
     view = resolve_view_config(args)
     boot_time = psutil.boot_time()
-    state = SystemState()
+    state = SystemState(interface=args.interface)
+
+    if args.interface:
+        interfaces = psutil.net_io_counters(pernic=True)
+        if args.interface not in interfaces:
+            available = ", ".join(sorted(interfaces.keys())) or "none"
+            print(
+                f"error: interface '{args.interface}' not found. Available interfaces: {available}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
     renderer = TerminalRenderer()
 
     psutil.cpu_percent(interval=None)
-    renderer.start()
+
+    if not args.once:
+        renderer.start()
 
     try:
         while True:
             metrics = collect_metrics(state, boot_time)
-            renderer.render(render_dashboard(metrics, state, view=view))
-            time.sleep(1)
+            frame = render_dashboard(
+                metrics,
+                state,
+                view=view,
+                refresh_interval=args.refresh,
+            )
+
+            if args.once:
+                print(frame)
+            else:
+                renderer.render(frame)
+
+            if args.once:
+                break
+
+            time.sleep(args.refresh)
+
     finally:
-        cleanup_terminal(renderer)
+        if not args.once:
+            cleanup_terminal(renderer)
+
 
 if __name__ == "__main__":
     try:
