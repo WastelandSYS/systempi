@@ -104,7 +104,7 @@ The uninstaller removes the global `systempi` shortcut from `/usr/local/bin`. It
 
 ---
 
-# USAGE
+# USAGE / Variations
 
 Default launch:
 
@@ -115,7 +115,19 @@ systempi
 Compact mode:
 
 ```bash
-systempi --compact
+systempi --variation compact
+```
+
+Minimal mode:
+
+```bash
+systempi --variation minimal
+```
+
+Balanced mode:
+
+```bash
+systempi --variation balanced
 ```
 
 Theme selection examples:
@@ -124,12 +136,6 @@ Theme selection examples:
 systempi --theme ocean
 systempi --theme matrix
 systempi --theme wasteland
-```
-
-Alternative layout:
-
-```bash
-systempi --variation insight
 ```
 
 Help menu:
