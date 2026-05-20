@@ -29,43 +29,43 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 
 ## Default Theme
 
-<img width="900" alt="default theme" src="https://github.com/user-attachments/assets/be4ac555-3395-4379-ad7c-2addd471b192" />
+<img width="900" height="650" alt="defaultdash" src="https://github.com/user-attachments/assets/27e92036-a499-4738-bcae-c0f8a6c846b2" />
 
 ---
 
 ## Matrix Theme
 
-<img width="900" alt="matrix theme" src="IMAGE_HERE" />
+<img width="900" height="650" alt="matrix1" src="https://github.com/user-attachments/assets/7ae45ea8-e6a3-4618-843e-d523574df46a" />
 
 ---
 
 ## Ocean Theme
 
-<img width="900" alt="ocean theme" src="IMAGE_HERE" />
+<img width="900" height="650" alt="ocean-1" src="https://github.com/user-attachments/assets/fa7e244d-de45-41b6-9ae1-1f38fdb7f826" />
 
 ---
 
 ## Lava Theme
 
-<img width="900" alt="lava theme" src="IMAGE_HERE" />
+<img width="900" height="650" alt="lava" src="https://github.com/user-attachments/assets/b0d0fd05-9b7a-4c96-ab43-ea4e5cc0e986" />
 
 ---
 
 ## Wasteland Theme
 
-<img width="900" alt="matrix theme" src="IMAGE_HERE" />
+<img width="900" height="650" alt="wastes" src="https://github.com/user-attachments/assets/7ff5fbd9-5b2b-42df-b350-a80133fc4b9c" />
 
 ---
 
 ## mono Theme
 
-<img width="900" alt="matrix theme" src="IMAGE_HERE" />
+<img width="900" height="650" alt="mono" src="https://github.com/user-attachments/assets/51e3364b-1644-468a-ac51-d259d865a64f" />
 
 ---
 
 ## girly Theme
 
-<img width="900" alt="matrix theme" src="IMAGE_HERE" />
+<img width="900" height="650" alt="girly" src="https://github.com/user-attachments/assets/0da1e9b1-b0ed-4776-be4e-4134e9a9ffe5" />
 
 ---
 
