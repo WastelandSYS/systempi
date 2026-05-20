@@ -185,7 +185,7 @@ The dashboard focuses on:
 
 # LICENSE
 
-MIT License
+MIT License ( Coming soon)
 
 ---
 
