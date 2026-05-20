@@ -523,10 +523,54 @@ def render_core_line(core_loads, width):
     return panel_line(truncate_display(content, width - 4), width)
 
 VARIATIONS = {
-    "balanced": {"compact": False, "show_cores": True, "show_io_details": True, "show_net_details": True},
-    "compact": {"compact": True, "show_cores": False, "show_io_details": False, "show_net_details": False},
-    "minimal": {"compact": True, "show_cores": False, "show_io_details": False, "show_net_details": False},
-    "insight": {"compact": False, "show_cores": True, "show_io_details": True, "show_net_details": True},
+    "balanced": {
+        "mode": "balanced",
+        "compact": False,
+        "show_cores": True,
+        "show_io_details": True,
+        "show_net_details": True,
+        "show_uptime": True,
+        "show_load_average": True,
+        "show_swap": True,
+        "show_power_details": True,
+        "show_storage_health": True,
+        "show_stability_avg": True,
+        "health_trend_width": "normal",
+        "bar_profile": "normal",
+        "health_why_limit": 3,
+    },
+    "compact": {
+        "mode": "compact",
+        "compact": True,
+        "show_cores": False,
+        "show_io_details": False,
+        "show_net_details": False,
+        "show_uptime": False,
+        "show_load_average": False,
+        "show_swap": True,
+        "show_power_details": True,
+        "show_storage_health": True,
+        "show_stability_avg": True,
+        "health_trend_width": "short",
+        "bar_profile": "short",
+        "health_why_limit": 2,
+    },
+    "minimal": {
+        "mode": "minimal",
+        "compact": True,
+        "show_cores": False,
+        "show_io_details": False,
+        "show_net_details": False,
+        "show_uptime": False,
+        "show_load_average": False,
+        "show_swap": False,
+        "show_power_details": "warning_only",
+        "show_storage_health": False,
+        "show_stability_avg": False,
+        "health_trend_width": "off",
+        "bar_profile": "short",
+        "health_why_limit": 2,
+    },
 }
 
 
@@ -536,15 +580,155 @@ def resolve_view_config(args):
         view["compact"] = True
     return view
 
+def health_why_with_limit(reasons, limit):
+    if limit <= 0:
+        return []
+    return reasons[:limit]
+
+def has_power_warning(throttle, latch):
+    if not throttle:
+        return False
+    return (
+        latch
+        or throttle.get("throttled")
+        or throttle.get("undervoltage")
+        or throttle.get("freq_capped")
+        or throttle.get("soft_temp_limit")
+    )
+
+def render_power_rows(lines, metrics, state, width):
+    throttle = metrics["throttle"]
+    if throttle is None:
+        lines.append(metric_row("Throttled", "N/A", width=width))
+        lines.append(metric_row("Freq Capped", "N/A", width=width))
+        lines.append(metric_row("Occurred", "N/A", width=width))
+        lines.append(metric_row("Undervoltage", "N/A", width=width))
+        return
+
+    throttle_color = "red" if throttle["throttled"] else "green"
+    freq_capped_color = "yellow" if throttle["freq_capped"] else "green"
+    occurred_color = "red" if state.throttle_occurred_latch else "green"
+    undervolt_color = "red" if throttle["undervoltage"] else "green"
+    lines.append(metric_row("Throttled", "YES" if throttle["throttled"] else "NO", color=throttle_color, width=width))
+    lines.append(metric_row("Freq Capped", "YES" if throttle["freq_capped"] else "NO", color=freq_capped_color, width=width))
+    lines.append(metric_row("Occurred", "YES" if state.throttle_occurred_latch else "NO", color=occurred_color, width=width))
+    lines.append(metric_row("Undervoltage", "YES" if throttle["undervoltage"] else "NO", color=undervolt_color, width=width))
+
+def choose_bar_width(width, compact, profile):
+    if profile == "short":
+        preferred = 10 if compact else 14
+    elif profile == "long":
+        preferred = 20 if compact else (24 if width < 86 else 32)
+    else:
+        preferred = 16 if compact else (20 if width < 86 else 28)
+    max_bar_width = max(4, width - 46)
+    return max(4, min(preferred, max_bar_width))
+
+def choose_trend_width(width, mode):
+    if mode == "off":
+        return 0
+    if mode == "short":
+        preferred = 14 if width < 86 else 18
+    elif mode == "long":
+        preferred = 28 if width < 86 else 38
+    else:
+        preferred = 20 if width < 86 else 28
+    return max(4, min(preferred, width - 22))
+
+def render_top_panel(lines, width, metrics):
+    lines.append("╭" + "─" * (width - 0) + "╮")
+    title = colorize("SYSTEMPI v2.1 Dashboard", "bold_cyan")
+    subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: 1s"
+    title_padding = max(1, width - 4 - len(strip_ansi(title)) - len(subtitle))
+    header = f"{title}{' ' * title_padding}{COLORS['dim']}{subtitle}{RESET}"
+    lines.append(panel_line(truncate_display(header, width - 4), width))
+    lines.append(divider(width))
+
+def key_value_line(label, value, width, label_width=14):
+    content = f"{label:<{label_width}}{value}"
+    return panel_line(truncate_display(content, width - 4), width)
+
+def compact_dual_metric_row(left_label, left_value, right_label, right_value, width):
+    left = f"{left_label:<6} {left_value:>6}"
+    right = f"{right_label:<6} {right_value:>7}"
+    content = f"{left}    {right}"
+    return panel_line(truncate_display(content, width - 4), width)
+
+def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_view):
+    minimal_bar = max(6, min(bar_width, 14))
+    lines.append(section_title("MINIMAL ESSENTIALS", width))
+
+    cpu_badge = status_badge(metrics["cpu_load"], CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM)
+    mem_badge = status_badge(metrics["mem_percent"], 70, 90)
+
+    lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], minimal_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), badge=cpu_badge, color=cpu_badge[1], width=width))
+
+    if metrics["temperature"] is None:
+        lines.append(metric_row("CPU Temp", "N/A", width=width))
+    else:
+        temp_badge = status_badge(metrics["temperature"], TEMP_WARNING, TEMP_CRITICAL)
+        lines.append(metric_row("CPU Temp", f"{metrics['temperature']:.1f}", "°C", bar=" " * minimal_bar, badge=temp_badge, color=temp_badge[1], width=width))
+
+    disk_badge = status_badge(metrics["disk_usage"], 80, 95)
+
+    lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], minimal_bar, 70, 90), badge=mem_badge, color=mem_badge[1], width=width))
+    lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], minimal_bar, 80, 95), badge=disk_badge, color=disk_badge[1], width=width))
+    lines.append(metric_row("Net Total", f"{metrics['network_sent_per_sec'] + metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
+
+    lines.append(divider(width))
+    lines.append(section_title("MINIMAL HEALTH", width))
+
+    if effective_view["show_power_details"] == "warning_only" and has_power_warning(metrics["throttle"], state.throttle_occurred_latch):
+        render_power_rows(lines, metrics, state, width)
+
+    health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
+    lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], bar_width, 80, 50, inverse=True), badge=health_badge, color=health_badge[1], width=width))
+    lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], effective_view.get("health_why_limit", 2)), width))
+    lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Minimal essentials", "dim"), width))
+
+def render_compact_dashboard(lines, metrics, state, width, bar_width):
+    cpu_color = severity_color(metrics["cpu_load"], CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM)
+    temp_value = "N/A" if metrics["temperature"] is None else f"{metrics['temperature']:.0f}C"
+    temp_color = "white" if metrics["temperature"] is None else severity_color(metrics["temperature"], TEMP_WARNING, TEMP_CRITICAL)
+    mem_color = severity_color(metrics["mem_percent"], 70, 90)
+    disk_color = severity_color(metrics["disk_usage"], 80, 95)
+    net_total = metrics["network_sent_per_sec"] + metrics["network_recv_per_sec"]
+    health_color = severity_color(metrics["system_health"], 80, 50, inverse=True)
+    cpu_pct = f"{metrics['cpu_load']:.0f}%"
+    ram_pct = f"{metrics['mem_percent']:.0f}%"
+    disk_pct = f"{metrics['disk_usage']:.0f}%"
+    health_pct = f"{metrics['system_health']}%"
+    lines.append(section_title("COMPACT SNAPSHOT", width))
+    lines.append(compact_dual_metric_row(colorize("CPU", "bold_cyan"), colorize(cpu_pct, cpu_color), colorize("TEMP", "bold_cyan"), colorize(temp_value, temp_color), width))
+    lines.append(compact_dual_metric_row(colorize("RAM", "bold_cyan"), colorize(ram_pct, mem_color), colorize("DISK", "bold_cyan"), colorize(disk_pct, disk_color), width))
+    lines.append(compact_dual_metric_row(colorize("NET", "bold_cyan"), colorize(f"{net_total:.0f}k", "white"), colorize("HEALTH", "bold_cyan"), colorize(health_pct, health_color), width))
+    lines.append(divider(width))
+
+    compact_bar = max(6, min(bar_width, 10))
+    lines.append(section_title("COMPACT SYSTEM", width))
+    lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], compact_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), color=cpu_color, width=width))
+    lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], compact_bar, 70, 90), color=mem_color, width=width))
+    lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], compact_bar, 80, 95), color=disk_color, width=width))
+    lines.append(metric_row("Net Total", f"{net_total:.2f}", "KiB/s", color="white", width=width))
+    lines.append(divider(width))
+    lines.append(section_title("COMPACT HEALTH", width))
+    trend = sparkline(state.health_history, width=max(8, min(12, width - 24)))
+    lines.append(key_value_line("Trend", trend, width, label_width=18))
+    lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], compact_bar, 80, 50, inverse=True), color=health_color, width=width))
+    lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], 2), width))
+    lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Compact snapshot", "dim"), width))
 
 def render_dashboard(metrics, state, view):
     terminal_width = shutil.get_terminal_size((88, 24)).columns
     compact = view["compact"] or terminal_width < 72
-    max_width = 78 if compact else 86
+    if view.get("mode") == "minimal":
+        max_width = 74
+    elif view.get("mode") == "compact":
+        max_width = 76
+    else:
+        max_width = 86
     width = min(max(2, terminal_width - 2), max_width)
-    preferred_bar_width = 16 if compact else (20 if width < 86 else 28)
-    max_bar_width = max(4, width - 46)
-    bar_width = max(4, min(preferred_bar_width, max_bar_width))
+    bar_width = choose_bar_width(width, compact, view.get("bar_profile", "normal"))
     effective_view = view.copy()
 
     if width < 72:
@@ -554,13 +738,15 @@ def render_dashboard(metrics, state, view):
         effective_view["show_net_details"] = False
 
     lines = []
-    lines.append("╭" + "─" * (width - 0) + "╮")
-    title = colorize("SYSTEMPI v2.1 Dashboard", "bold_cyan")
-    subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: 1s"
-    title_padding = max(1, width - 4 - len(strip_ansi(title)) - len(subtitle))
-    header = f"{title}{' ' * title_padding}{COLORS['dim']}{subtitle}{RESET}"
-    lines.append(panel_line(truncate_display(header, width - 4), width))
-    lines.append(divider(width))
+    render_top_panel(lines, width, metrics)
+    if view.get("mode") == "minimal":
+        render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_view)
+        lines.append("╰" + "─" * (width - 0) + "╯")
+        return "\n".join(lines)
+    if view.get("mode") == "compact":
+        render_compact_dashboard(lines, metrics, state, width, bar_width)
+        lines.append("╰" + "─" * (width - 0) + "╯")
+        return "\n".join(lines)
 
     lines.append(section_title("CPU / THERMAL", width))
     cpu_badge = status_badge(metrics["cpu_load"], CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM)
@@ -591,17 +777,20 @@ def render_dashboard(metrics, state, view):
 
     freq_value, freq_unit, freq_color = format_frequency(metrics["frequency"])
     lines.append(metric_row("ARM Freq", freq_value, freq_unit, color=freq_color, width=width))
-    lines.append(metric_row("Uptime", metrics["uptime"], width=width))
-    lines.append(metric_row(
-        "Load Avg",
-        f"{metrics['load_avg'][0]:.2f} / {metrics['load_avg'][1]:.2f} / {metrics['load_avg'][2]:.2f}",
-        "1/5/15",
-        color="white",
-        width=width,
-    ))
+    if effective_view["show_uptime"]:
+        lines.append(metric_row("Uptime", metrics["uptime"], width=width))
+    if effective_view["show_load_average"]:
+        lines.append(metric_row(
+            "Load Avg",
+            f"{metrics['load_avg'][0]:.2f} / {metrics['load_avg'][1]:.2f} / {metrics['load_avg'][2]:.2f}",
+            "1/5/15",
+            color="white",
+            width=width,
+        ))
 
     lines.append(divider(width))
-    lines.append(section_title("MEMORY / STORAGE", width))
+    mem_title = "MEMORY / STORAGE" if view.get("mode") != "compact" else "COMPACT MEMORY / STORAGE"
+    lines.append(section_title(mem_title, width))
     mem_badge = status_badge(metrics["mem_percent"], 70, 90)
     lines.append(metric_row(
         "RAM Usage",
@@ -612,16 +801,17 @@ def render_dashboard(metrics, state, view):
         color=mem_badge[1],
         width=width,
     ))
-    swap_badge = status_badge(metrics["swap_percent"], 40, 75)
-    lines.append(metric_row(
-        "Swap Usage",
-        f"{metrics['swap_percent']:.1f}",
-        "%",
-        bar=percent_bar(metrics["swap_percent"], bar_width, 40, 75),
-        badge=swap_badge,
-        color=swap_badge[1],
-        width=width,
-    ))
+    if effective_view["show_swap"]:
+        swap_badge = status_badge(metrics["swap_percent"], 40, 75)
+        lines.append(metric_row(
+            "Swap Usage",
+            f"{metrics['swap_percent']:.1f}",
+            "%",
+            bar=percent_bar(metrics["swap_percent"], bar_width, 40, 75),
+            badge=swap_badge,
+            color=swap_badge[1],
+            width=width,
+        ))
     disk_badge = status_badge(metrics["disk_usage"], 80, 95)
     lines.append(metric_row(
         "Disk Usage",
@@ -637,7 +827,8 @@ def render_dashboard(metrics, state, view):
         lines.append(metric_row("Disk Write", f"{metrics['disk_write_per_sec']:.2f}", "KiB/s", color="magenta", width=width))
 
     lines.append(divider(width))
-    lines.append(section_title("NETWORK", width))
+    net_title = "NETWORK" if view.get("mode") != "compact" else "COMPACT NETWORK"
+    lines.append(section_title(net_title, width))
     if effective_view["show_net_details"]:
         lines.append(metric_row("Sent", f"{metrics['network_sent_per_sec']:.2f}", "KiB/s", color="white", width=width))
         lines.append(metric_row("Received", f"{metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
@@ -645,26 +836,15 @@ def render_dashboard(metrics, state, view):
 
     lines.append(divider(width))
     lines.append(section_title("POWER / HEALTH", width))
-    throttle = metrics["throttle"]
-    if throttle is None:
-        lines.append(metric_row("Throttled", "N/A", width=width))
-        lines.append(metric_row("Freq Capped", "N/A", width=width))
-        lines.append(metric_row("Occurred", "N/A", width=width))
-        lines.append(metric_row("Undervoltage", "N/A", width=width))
-    else:
-        throttle_color = "red" if throttle["throttled"] else "green"
-        freq_capped_color = "yellow" if throttle["freq_capped"] else "green"
-        occurred_color = "red" if state.throttle_occurred_latch else "green"
-        undervolt_color = "red" if throttle["undervoltage"] else "green"
-        lines.append(metric_row("Throttled", "YES" if throttle["throttled"] else "NO", color=throttle_color, width=width))
-        lines.append(metric_row("Freq Capped", "YES" if throttle["freq_capped"] else "NO", color=freq_capped_color, width=width))
-        lines.append(metric_row("Occurred", "YES" if state.throttle_occurred_latch else "NO", color=occurred_color, width=width))
-        lines.append(metric_row("Undervoltage", "YES" if throttle["undervoltage"] else "NO", color=undervolt_color, width=width))
+    if effective_view["show_power_details"] is True:
+        render_power_rows(lines, metrics, state, width)
+    elif effective_view["show_power_details"] == "warning_only" and has_power_warning(metrics["throttle"], state.throttle_occurred_latch):
+        render_power_rows(lines, metrics, state, width)
 
-    preferred_trend_width = 20 if width < 86 else 28
-    trend_width = max(4, min(preferred_trend_width, width - 22))
-    trend = sparkline(state.health_history, width=trend_width)
-    lines.append(panel_line(truncate_display(f"Health Trend{' ' * 22}{trend}", width - 4), width))
+    trend_width = choose_trend_width(width, effective_view.get("health_trend_width", "normal"))
+    if trend_width > 0:
+        trend = sparkline(state.health_history, width=trend_width)
+        lines.append(key_value_line("Health Trend", trend, width, label_width=34))
     health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
     lines.append(metric_row(
         "System Health",
@@ -675,27 +855,29 @@ def render_dashboard(metrics, state, view):
         color=health_badge[1],
         width=width,
     ))
-    storage_badge = status_badge(metrics["storage_health"], 80, 50, inverse=True)
-    lines.append(metric_row(
-        "Storage Health",
-        f"{metrics['storage_health']}",
-        "%",
-        bar=percent_bar(metrics["storage_health"], bar_width, 80, 50, inverse=True),
-        badge=storage_badge,
-        color=storage_badge[1],
-        width=width,
-    ))
+    if effective_view["show_storage_health"]:
+        storage_badge = status_badge(metrics["storage_health"], 80, 50, inverse=True)
+        lines.append(metric_row(
+            "Storage Health",
+            f"{metrics['storage_health']}",
+            "%",
+            bar=percent_bar(metrics["storage_health"], bar_width, 80, 50, inverse=True),
+            badge=storage_badge,
+            color=storage_badge[1],
+            width=width,
+        ))
     stability_badge = status_badge(metrics["system_stability"], 80, 50, inverse=True)
-    lines.append(render_health_why_line(metrics["health_why"], width))
-    lines.append(metric_row(
-        "Stability Avg",
-        f"{metrics['system_stability']:.1f}",
-        "%",
-        bar=percent_bar(metrics["system_stability"], bar_width, 80, 50, inverse=True),
-        badge=stability_badge,
-        color=stability_badge[1],
-        width=width,
-    ))
+    lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], effective_view.get("health_why_limit", 3)), width))
+    if effective_view["show_stability_avg"]:
+        lines.append(metric_row(
+            "Stability Avg",
+            f"{metrics['system_stability']:.1f}",
+            "%",
+            bar=percent_bar(metrics["system_stability"], bar_width, 80, 50, inverse=True),
+            badge=stability_badge,
+            color=stability_badge[1],
+            width=width,
+        ))
     lines.append("╰" + "─" * (width - 0) + "╯")
 
     return "\n".join(lines)
@@ -781,7 +963,15 @@ def parse_args():
     parser = argparse.ArgumentParser(description="systempi realtime dashboard")
     parser.add_argument("--compact", action="store_true", help="smaller layout for narrow terminals")
     parser.add_argument("--theme", choices=sorted(THEMES.keys()), default="default", help="color theme")
-    parser.add_argument("--variation", choices=sorted(VARIATIONS.keys()), default="balanced", help="dashboard layout variation")
+    parser.add_argument(
+        "--variation",
+        choices=sorted(VARIATIONS.keys()),
+        default="balanced",
+        help=(
+            "dashboard layout variation: balanced (full default dashboard), "
+            "compact (same style, smaller terminal friendly), minimal (clean essential-only mode)"
+        ),
+    )
     return parser.parse_args()
 
 def main():
