@@ -57,13 +57,13 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 
 ---
 
-## mono Theme
+## Mono Theme
 
 <img width="900" height="650" alt="mono" src="https://github.com/user-attachments/assets/51e3364b-1644-468a-ac51-d259d865a64f" />
 
 ---
 
-## girly Theme
+## Girly Theme
 
 <img width="900" height="650" alt="girly" src="https://github.com/user-attachments/assets/0da1e9b1-b0ed-4776-be4e-4134e9a9ffe5" />
 
