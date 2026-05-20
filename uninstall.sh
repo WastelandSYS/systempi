@@ -13,9 +13,8 @@ Usage:
   sudo ./uninstall.sh [--remove-deps]
 
 Options:
-  --remove-deps   Also remove Raspberry Pi/SystemPi packages installed by install.sh
-                  (python3-psutil and libraspberrypi-bin). This does not remove
-                  python3 or python3-pip because other software may need them.
+  --remove-deps   Also remove packages install.sh may have installed for SystemPi
+                  (python3-psutil plus any available vcgencmd package).
   -h, --help      Show this help message.
 
 This removes the systempi command shortcut. It does not delete your cloned
@@ -40,14 +39,12 @@ for arg in "$@"; do
     esac
 done
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root:"
     echo "sudo ./uninstall.sh"
     exit 1
 fi
 
-# Remove shortcut created by install.sh
 if [ -L "$SYSTEMPI_BIN" ]; then
     rm -f "$SYSTEMPI_BIN"
     echo "Removed shortcut: $SYSTEMPI_BIN"
@@ -58,11 +55,18 @@ else
     echo "Shortcut not found: $SYSTEMPI_BIN"
 fi
 
-# Optionally remove packages that install.sh adds specifically for SystemPi.
-# Keep python3 and python3-pip installed because they are common system packages.
 if [ "$REMOVE_DEPS" = true ]; then
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get remove -y python3-psutil libraspberrypi-bin
+        apt-get remove -y python3-psutil || true
+
+        if apt-cache show libraspberrypi-bin >/dev/null 2>&1; then
+            apt-get remove -y libraspberrypi-bin || true
+        fi
+
+        if apt-cache show raspberrypi-utils >/dev/null 2>&1; then
+            apt-get remove -y raspberrypi-utils || true
+        fi
+
         apt-get autoremove -y
         echo "Removed optional SystemPi dependencies."
     else
