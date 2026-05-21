@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
+import platform
 import re
 import shutil
 import subprocess
 import sys
 import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
 
 import psutil
 
@@ -95,6 +100,72 @@ THEMES = {
         "bold_cyan": "\033[1;97m",
         "dim": "\033[2m",
     },
+    "amber": {
+        "green": "\033[38;5;214m",
+        "yellow": "\033[38;5;220m",
+        "red": "\033[38;5;196m",
+        "cyan": "\033[38;5;180m",
+        "blue": "\033[38;5;172m",
+        "magenta": "\033[38;5;179m",
+        "white": "\033[38;5;230m",
+        "bold_cyan": "\033[38;5;222;1m",
+        "dim": "\033[38;5;240m",
+    },
+    "crt": {
+        "green": "\033[38;5;120m",
+        "yellow": "\033[38;5;156m",
+        "red": "\033[38;5;203m",
+        "cyan": "\033[38;5;84m",
+        "blue": "\033[38;5;77m",
+        "magenta": "\033[38;5;114m",
+        "white": "\033[38;5;194m",
+        "bold_cyan": "\033[38;5;120;1m",
+        "dim": "\033[2m",
+    },
+    "vaulttec": {
+        "green": "\033[38;5;226m",
+        "yellow": "\033[38;5;220m",
+        "red": "\033[38;5;196m",
+        "cyan": "\033[38;5;227m",
+        "blue": "\033[38;5;178m",
+        "magenta": "\033[38;5;215m",
+        "white": "\033[38;5;230m",
+        "bold_cyan": "\033[38;5;226;1m",
+        "dim": "\033[38;5;240m",
+    },
+    "synthwave": {
+        "green": "\033[38;5;141m",
+        "yellow": "\033[38;5;219m",
+        "red": "\033[38;5;198m",
+        "cyan": "\033[38;5;51m",
+        "blue": "\033[38;5;99m",
+        "magenta": "\033[38;5;201m",
+        "white": "\033[38;5;225m",
+        "bold_cyan": "\033[38;5;117;1m",
+        "dim": "\033[38;5;60m",
+    },
+    "ice": {
+        "green": "\033[38;5;123m",
+        "yellow": "\033[38;5;159m",
+        "red": "\033[38;5;167m",
+        "cyan": "\033[38;5;87m",
+        "blue": "\033[38;5;111m",
+        "magenta": "\033[38;5;147m",
+        "white": "\033[38;5;231m",
+        "bold_cyan": "\033[38;5;123;1m",
+        "dim": "\033[38;5;250m",
+    },
+    "biohazard": {
+        "green": "\033[38;5;118m",
+        "yellow": "\033[38;5;190m",
+        "red": "\033[38;5;160m",
+        "cyan": "\033[38;5;154m",
+        "blue": "\033[38;5;70m",
+        "magenta": "\033[38;5;142m",
+        "white": "\033[38;5;230m",
+        "bold_cyan": "\033[38;5;118;1m",
+        "dim": "\033[38;5;238m",
+    },
 }
 
 COLORS = THEMES["default"].copy()
@@ -122,6 +193,21 @@ class SystemState:
         self.last_net_time = time.time()
         self.last_disk_time = time.time()
         self.throttle_occurred_latch = False
+        self.history = {
+            "cpu": deque(maxlen=60),
+            "ram": deque(maxlen=60),
+            "temp": deque(maxlen=60),
+            "net": deque(maxlen=60),
+            "health": deque(maxlen=60),
+        }
+        self.active_alerts = []
+        self.session_alert_counts = {}
+        self.event_log_path = default_log_path()
+        self.last_top_cpu_process = "N/A"
+
+def default_log_path():
+    home = Path.home()
+    return home / ".local" / "state" / "systempi" / "events.log"
 
 def run_vcgencmd(args):
     try:
@@ -583,6 +669,22 @@ VARIATIONS = {
         "bar_profile": "short",
         "health_why_limit": 2,
     },
+    "doctor": {
+        "mode": "doctor",
+        "compact": False,
+        "show_cores": False,
+        "show_io_details": True,
+        "show_net_details": False,
+        "show_uptime": True,
+        "show_load_average": True,
+        "show_swap": True,
+        "show_power_details": True,
+        "show_storage_health": True,
+        "show_stability_avg": True,
+        "health_trend_width": "short",
+        "bar_profile": "normal",
+        "health_why_limit": 4,
+    },
 }
 
 
@@ -665,6 +767,53 @@ def compact_dual_metric_row(left_label, left_value, right_label, right_value, wi
     right = f"{right_label:<6} {right_value:>7}"
     content = f"{left}    {right}"
     return panel_line(truncate_display(content, width - 4), width)
+
+def detect_pi_model():
+    model_path = Path("/proc/device-tree/model")
+    try:
+        if model_path.exists():
+            return model_path.read_text(errors="ignore").strip("\x00").strip()
+    except Exception:
+        pass
+    return "Unknown"
+
+def evaluate_alerts(metrics):
+    alerts = []
+    if metrics["cpu_load"] >= 90:
+        alerts.append("high_cpu")
+    if metrics["mem_percent"] >= 90:
+        alerts.append("high_ram")
+    if metrics["disk_usage"] >= 95:
+        alerts.append("high_disk")
+    if metrics["temperature"] is not None and metrics["temperature"] >= TEMP_CRITICAL:
+        alerts.append("high_temp")
+    if metrics["disk_write_per_sec"] >= 1024:
+        alerts.append("heavy_disk_write")
+    throttle = metrics["throttle"] or {}
+    if throttle.get("undervoltage"):
+        alerts.append("undervoltage")
+    if throttle.get("throttled"):
+        alerts.append("throttling")
+    if throttle.get("freq_capped"):
+        alerts.append("frequency_capped")
+    if throttle.get("soft_temp_limit"):
+        alerts.append("soft_temp_limit")
+    return alerts
+
+def log_alert_events(state, active_alerts):
+    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    new_alerts = [a for a in active_alerts if a not in state.active_alerts]
+    for alert in new_alerts:
+        state.session_alert_counts[alert] = state.session_alert_counts.get(alert, 0) + 1
+    if not new_alerts:
+        return
+    try:
+        state.event_log_path.parent.mkdir(parents=True, exist_ok=True)
+        with state.event_log_path.open("a", encoding="utf-8") as fh:
+            for alert in new_alerts:
+                fh.write(f"{now} {alert}\n")
+    except Exception:
+        pass
 
 def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_view):
     minimal_bar = max(6, min(bar_width, 14))
@@ -786,6 +935,11 @@ def render_dashboard(metrics, state, view, refresh_interval):
             color=temp_badge[1],
             width=width,
         ))
+    if view.get("mode") == "doctor":
+        cpu_trend = sparkline(list(state.history["cpu"]), width=max(8, min(16, width - 24)))
+        ram_trend = sparkline(list(state.history["ram"]), width=max(8, min(16, width - 24)))
+        lines.append(key_value_line("CPU Trend", cpu_trend, width))
+        lines.append(key_value_line("RAM Trend", ram_trend, width))
 
     freq_value, freq_unit, freq_color = format_frequency(metrics["frequency"])
     lines.append(metric_row("ARM Freq", freq_value, freq_unit, color=freq_color, width=width))
@@ -845,6 +999,9 @@ def render_dashboard(metrics, state, view, refresh_interval):
         lines.append(metric_row("Sent", f"{metrics['network_sent_per_sec']:.2f}", "KiB/s", color="white", width=width))
         lines.append(metric_row("Received", f"{metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
     lines.append(metric_row("Net Total", f"{metrics['network_sent_per_sec'] + metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
+    if view.get("mode") == "doctor":
+        net_trend = sparkline(list(state.history["net"]), width=max(8, min(16, width - 24)))
+        lines.append(key_value_line("Net Trend", net_trend, width))
 
     lines.append(divider(width))
     lines.append(section_title("POWER / HEALTH", width))
@@ -855,8 +1012,11 @@ def render_dashboard(metrics, state, view, refresh_interval):
 
     trend_width = choose_trend_width(width, effective_view.get("health_trend_width", "normal"))
     if trend_width > 0:
-        trend = sparkline(state.health_history, width=trend_width)
+        trend = sparkline(list(state.history["health"]), width=trend_width)
         lines.append(key_value_line("Health Trend", trend, width, label_width=34))
+    if metrics["temperature"] is not None and view.get("mode") in ("balanced", "doctor"):
+        temp_trend = sparkline(list(state.history["temp"]), width=max(8, min(16, width - 24)))
+        lines.append(key_value_line("Temp Trend", temp_trend, width))
     health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
     lines.append(metric_row(
         "System Health",
@@ -890,6 +1050,17 @@ def render_dashboard(metrics, state, view, refresh_interval):
             color=stability_badge[1],
             width=width,
         ))
+    if view.get("mode") == "doctor":
+        lines.append(divider(width))
+        lines.append(section_title("DOCTOR INSIGHT", width))
+        lines.append(metric_row("Pi Model", metrics["pi_model"], width=width))
+        lines.append(metric_row("Arch", metrics["architecture"], width=width))
+        lines.append(metric_row("Total RAM", f"{metrics['total_ram_gb']:.1f}", "GiB", width=width))
+        lines.append(metric_row("Top CPU Proc", metrics["top_cpu_process"], width=width))
+        lines.append(metric_row("Top RAM Proc", metrics["top_mem_process"], width=width))
+        active_alerts = metrics.get("active_alerts", [])
+        alert_text = ", ".join(active_alerts[:3]) if active_alerts else "none"
+        lines.append(metric_row("Active Alerts", alert_text, width=width))
     lines.append("╰" + "─" * (width - 0) + "╯")
 
     return "\n".join(lines)
@@ -925,9 +1096,6 @@ def collect_metrics(state, boot_time):
 
     state.health_history.append(system_health)
 
-    if len(state.health_history) > 60:
-        state.health_history.pop(0)
-
     system_stability = (
         sum(state.health_history) / len(state.health_history)
         if state.health_history else 100
@@ -949,6 +1117,35 @@ def collect_metrics(state, boot_time):
     ):
         state.throttle_occurred_latch = True
 
+    net_total = network_sent_per_sec + network_recv_per_sec
+    state.history["cpu"].append(cpu_load)
+    state.history["ram"].append(mem_percent)
+    state.history["net"].append(net_total)
+    state.history["health"].append(system_health)
+    if temperature is not None:
+        state.history["temp"].append(temperature)
+
+    top_cpu_process = state.last_top_cpu_process
+    top_mem_process = "N/A"
+    try:
+        mem_procs = []
+        cpu_procs = []
+        for proc in psutil.process_iter(["name", "memory_percent", "cpu_percent"]):
+            name = proc.info.get("name") or "unknown"
+            mem_procs.append((name, proc.info.get("memory_percent") or 0.0))
+            cpu = proc.info.get("cpu_percent")
+            if cpu and cpu > 0:
+                cpu_procs.append((name, cpu))
+        if mem_procs:
+            top_mem = max(mem_procs, key=lambda x: x[1])
+            top_mem_process = f"{top_mem[0]} {top_mem[1]:.1f}%"
+        if cpu_procs:
+            top_cpu = max(cpu_procs, key=lambda x: x[1])
+            top_cpu_process = f"{top_cpu[0]} {top_cpu[1]:.1f}%"
+    except Exception:
+        pass
+    state.last_top_cpu_process = top_cpu_process
+
     return {
         "temperature": temperature,
         "frequency": frequency,
@@ -969,7 +1166,29 @@ def collect_metrics(state, boot_time):
         "storage_health": storage_health,
         "uptime": format_uptime(time.time() - boot_time),
         "health_why": health_explainability(cpu_load, temperature, mem_percent, disk_usage, throttle),
+        "pi_model": detect_pi_model(),
+        "architecture": platform.machine(),
+        "total_ram_gb": psutil.virtual_memory().total / (1024**3),
+        "top_cpu_process": top_cpu_process,
+        "top_mem_process": top_mem_process,
     }
+
+def snapshot_to_text(metrics):
+    plain = [
+        "SystemPi Snapshot Report",
+        "=======================",
+    ]
+    for key in sorted(metrics.keys()):
+        plain.append(f"{key}: {metrics[key]}")
+    return "\n".join(plain)
+
+def export_snapshot(metrics, export_format, output_path):
+    if export_format == "json":
+        payload = json.dumps(metrics, indent=2, sort_keys=True, default=str)
+    else:
+        payload = snapshot_to_text(metrics)
+    with open(output_path, "w", encoding="utf-8") as fh:
+        fh.write(payload + "\n")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="systempi realtime dashboard")
@@ -979,18 +1198,27 @@ def parse_args():
     parser.add_argument("--interface", help="network interface to monitor (example: eth0, wlan0)")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
     parser.add_argument("--once", action="store_true", help="render one snapshot and exit")
+    parser.add_argument("--export", choices=["text", "json"], help="export once snapshot to file")
+    parser.add_argument("--output", help="export output path for --once")
+    parser.add_argument("--watch", action="store_true", help="enable background alert event logging")
+    parser.add_argument("--history", action="store_true", help="print recent alert event history and exit")
     parser.add_argument(
         "--variation",
         choices=sorted(VARIATIONS.keys()),
         default="balanced",
         help=(
             "dashboard layout variation: balanced (full default dashboard), "
-            "compact (same style, smaller terminal friendly), minimal (clean essential-only mode)"
+            "compact (same style, smaller terminal friendly), "
+            "minimal (clean essential-only mode), doctor (diagnostic-focused mode)"
         ),
     )
     args = parser.parse_args()
     if args.refresh <= 0:
         parser.error("--refresh must be greater than 0")
+    if args.export and not args.once:
+        parser.error("--export requires --once")
+    if args.export and not args.output:
+        parser.error("--output is required when using --export")
     return args
 
 def main():
@@ -1004,6 +1232,13 @@ def main():
     view = resolve_view_config(args)
     boot_time = psutil.boot_time()
     state = SystemState(interface=args.interface)
+    if args.history:
+        if state.event_log_path.exists():
+            lines = state.event_log_path.read_text(encoding="utf-8").splitlines()[-40:]
+            print("\n".join(lines) if lines else "No event history yet.")
+        else:
+            print("No event history yet.")
+        return
 
     if args.interface:
         interfaces = psutil.net_io_counters(pernic=True)
@@ -1025,6 +1260,10 @@ def main():
     try:
         while True:
             metrics = collect_metrics(state, boot_time)
+            metrics["active_alerts"] = evaluate_alerts(metrics)
+            if args.watch:
+                log_alert_events(state, metrics["active_alerts"])
+            state.active_alerts = metrics["active_alerts"]
             frame = render_dashboard(
                 metrics,
                 state,
@@ -1034,6 +1273,8 @@ def main():
 
             if args.once:
                 print(frame)
+                if args.export:
+                    export_snapshot(metrics, args.export, args.output)
             else:
                 renderer.render(frame)
 
