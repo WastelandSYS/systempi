@@ -19,7 +19,6 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Dynamic "Health Why" explainability diagnostics
 - 7 built-in themes including matrix, wasteland, ocean, lava, mono, and more
 - 3 different output variations including Default/Balanced, Compact, and Minimal
-- Multiple dashboard variations including balanced, compact, and minimal modes
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
 - Adaptive dashboard scaling based on terminal width
 - Live per-core CPU visualization, disk I/O rates, network throughput, load average, and uptime
