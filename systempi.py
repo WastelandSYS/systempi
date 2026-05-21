@@ -628,7 +628,7 @@ def render_power_rows(lines, metrics, state, width):
 
 def choose_bar_width(width, compact, profile):
     if profile == "short":
-        preferred = 10 if compact else 14
+        preferred = 14 if compact else 14
     elif profile == "long":
         preferred = 20 if compact else (24 if width < 86 else 32)
     else:
@@ -716,7 +716,7 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
     lines.append(compact_dual_metric_row(colorize("NET", "bold_cyan"), colorize(f"{net_total:.0f}k", "white"), colorize("HEALTH", "bold_cyan"), colorize(health_pct, health_color), width))
     lines.append(divider(width))
 
-    compact_bar = max(6, min(bar_width, 10))
+    compact_bar = max(6, min(bar_width, 14))
     lines.append(section_title("COMPACT SYSTEM", width))
     lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], compact_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), color=cpu_color, width=width))
     lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], compact_bar, 70, 90), color=mem_color, width=width))
