@@ -18,6 +18,7 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Dynamic system health, storage health, and stability scoring
 - Dynamic "Health Why" explainability diagnostics
 - 7 built-in themes including matrix, wasteland, ocean, lava, mono, and more
+- 3 different output variations including Default/Balanced, Compact, and Minimal
 - Multiple dashboard variations including balanced, compact, and minimal modes
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
 - Adaptive dashboard scaling based on terminal width
@@ -112,6 +113,12 @@ Default launch:
 systempi
 ```
 
+One-shot snapshot mode (render once and exit):
+
+```bash
+systempi --once
+```
+
 Compact mode:
 
 ```bash
@@ -136,6 +143,32 @@ Theme selection examples:
 systempi --theme ocean
 systempi --theme matrix
 systempi --theme wasteland
+```
+
+Refresh interval examples:
+
+```bash
+systempi --refresh 0.5
+systempi --refresh 2
+```
+
+Pin network metrics to a specific interface:
+
+```bash
+systempi --interface eth0
+systempi --interface wlan0
+```
+
+Disable ANSI colors:
+
+```bash
+systempi --no-color
+```
+
+Combine options:
+
+```bash
+systempi --variation compact --theme mono --refresh 2 --interface wlan0 --no-color
 ```
 
 Help menu:
