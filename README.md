@@ -17,8 +17,11 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Power, throttling, undervoltage, and frequency-capping detection
 - Dynamic system health, storage health, and stability scoring
 - Dynamic "Health Why" explainability diagnostics
-- 7 built-in themes including matrix, wasteland, ocean, lava, mono, and more
-- 3 different output variations including Default/Balanced, Compact, and Minimal
+- Historical mini-graphs for health and temperature, with expanded CPU,RAM,and network trends in doctor mode.
+- Lightweight active alert detection for CPU, RAM, disk, temperature, and Pi power/throttle events
+- Raspberry Pi hardware intelligence with model/arch/RAM/top-process insight rows
+- 13 built-in themes including matrix, wasteland, ocean, lava, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
+- 4 dashboard variations: Balanced, Compact, Minimal, and Doctor
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
 - Adaptive dashboard scaling based on terminal width
 - Live per-core CPU visualization, disk I/O rates, network throughput, load average, and uptime
@@ -136,6 +139,30 @@ Balanced mode:
 systempi --variation balanced
 ```
 
+Doctor mode (diagnostic-focused):
+
+```bash
+systempi --variation doctor
+```
+
+Once + export snapshot:
+
+```bash
+systempi --once --export text --output report.txt
+systempi --once --export json --output report.json
+```
+
+Background alert logging and event history:
+
+```bash
+systempi --watch
+systempi --history
+```
+
+`--watch` records newly active alert events, and `--history` prints recent events from:
+
+`~/.local/state/systempi/events.log`
+
 Theme selection examples:
 
 ```bash
@@ -187,6 +214,12 @@ systempi -h
 - lava
 - mono
 - girly
+- amber
+- crt
+- vaulttec
+- synthwave
+- ice
+- biohazard
 
 ---
 
