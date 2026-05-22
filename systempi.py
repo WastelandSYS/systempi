@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psutil
@@ -801,7 +801,7 @@ def evaluate_alerts(metrics):
     return alerts
 
 def log_alert_events(state, active_alerts):
-    now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     new_alerts = [a for a in active_alerts if a not in state.active_alerts]
     for alert in new_alerts:
         state.session_alert_counts[alert] = state.session_alert_counts.get(alert, 0) + 1
@@ -812,6 +812,13 @@ def log_alert_events(state, active_alerts):
         with state.event_log_path.open("a", encoding="utf-8") as fh:
             for alert in new_alerts:
                 fh.write(f"{now} {alert}\n")
+    except Exception:
+        pass
+
+def prepare_event_log(state):
+    try:
+        state.event_log_path.parent.mkdir(parents=True, exist_ok=True)
+        state.event_log_path.touch(exist_ok=True)
     except Exception:
         pass
 
@@ -1232,6 +1239,8 @@ def main():
     view = resolve_view_config(args)
     boot_time = psutil.boot_time()
     state = SystemState(interface=args.interface)
+    if args.watch:
+        prepare_event_log(state)
     if args.history:
         if state.event_log_path.exists():
             lines = state.event_log_path.read_text(encoding="utf-8").splitlines()[-40:]
