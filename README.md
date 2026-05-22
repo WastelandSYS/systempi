@@ -17,7 +17,8 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Power, throttling, undervoltage, and frequency-capping detection
 - Dynamic system health, storage health, and stability scoring
 - Dynamic "Health Why" explainability diagnostics
-- Historical mini-graphs for health and temperature, with expanded CPU,RAM,and network trends in doctor mode.
+- Historical mini-graphs for health and temperature, with expanded CPU, RAM, and network trends in Doctor mode
+- Persistent alert event logging with watch/history support
 - Lightweight active alert detection for CPU, RAM, disk, temperature, and Pi power/throttle events
 - Raspberry Pi hardware intelligence with model/arch/RAM/top-process insight rows
 - 13 built-in themes including matrix, wasteland, ocean, lava, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
@@ -25,6 +26,17 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
 - Adaptive dashboard scaling based on terminal width
 - Live per-core CPU visualization, disk I/O rates, network throughput, load average, and uptime
+
+---
+
+# DASHBOARD MODES
+
+| Mode | Purpose |
+|------|----------|
+| Balanced | Full monitoring dashboard |
+| Compact | Smaller terminal optimized |
+| Minimal | Essential-only clean mode |
+| Doctor | Diagnostic & alert-focused mode |
 
 ---
 
@@ -152,7 +164,7 @@ systempi --once --export text --output report.txt
 systempi --once --export json --output report.json
 ```
 
-Background alert logging and event history:
+Live alert event logging with watch/history support:
 
 ```bash
 systempi --watch
