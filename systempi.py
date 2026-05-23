@@ -399,7 +399,7 @@ def sparkline(values, width=24):
     high = max(samples)
 
     if high == low:
-        return colorize(blocks[-1] * len(samples), "green")
+        return colorize(blocks[0] * len(samples), "green")
 
     points = []
     for value in samples:
@@ -565,6 +565,79 @@ def calculate_storage_health(disk_usage, write_rate):
 
     return max(0, health)
 
+def doctor_status_color(value):
+    value_lower = str(value).lower()
+
+    if any(word in value_lower for word in ("critical", "active undervoltage", "active throttling")):
+        return "red"
+
+    if any(word in value_lower for word in ("warm", "struggling", "getting tight", "heavy", "pressure", "past")):
+        return "yellow"
+
+    if any(word in value_lower for word in ("stable", "low", "idle")):
+        return "green"
+
+    return "white"
+
+def cooling_assessment(metrics):
+    temperature = metrics.get("temperature")
+    cpu_load = metrics.get("cpu_load", 0.0)
+
+    if temperature is None:
+        return "Pi temperature unavailable"
+    if temperature >= TEMP_CRITICAL or (temperature >= TEMP_WARNING + 8 and cpu_load >= 85):
+        return "Critical thermal pressure"
+    if temperature >= TEMP_WARNING + 5 and cpu_load >= 70:
+        return "Cooling struggling under load"
+    if temperature >= TEMP_WARNING or cpu_load >= 70:
+        return "Warm but manageable"
+    return "Thermals stable"
+
+def power_stability_assessment(metrics, state):
+    throttle = metrics.get("throttle")
+    if not throttle:
+        return "Power telemetry unavailable"
+    if throttle.get("undervoltage"):
+        return "Active undervoltage detected"
+    if throttle.get("throttled") or throttle.get("soft_temp_limit"):
+        return "Active throttling detected"
+    if throttle.get("freq_capped"):
+        return "Frequency cap active"
+    if state.throttle_occurred_latch:
+        return "Past power/throttle event detected"
+    return "Power delivery stable"
+
+def workload_profile(metrics):
+    cpu_load = metrics.get("cpu_load", 0.0)
+    mem_percent = metrics.get("mem_percent", 0.0)
+    disk_read_per_sec = metrics.get("disk_read_per_sec", 0.0)
+    disk_write_per_sec = metrics.get("disk_write_per_sec", 0.0)
+    load_avg = metrics.get("load_avg") or [0.0]
+    load_1m = load_avg[0] if load_avg else 0.0
+
+    if disk_read_per_sec > 600 or disk_write_per_sec > 600:
+        return "Heavy disk I/O workload"
+    if mem_percent >= 85:
+        return "Memory pressure workload"
+    if cpu_load >= 80 or load_1m >= 3.0:
+        return "Heavy CPU-bound workload"
+    if cpu_load < 20 and mem_percent < 55 and disk_read_per_sec < 80 and disk_write_per_sec < 80:
+        return "Mostly idle"
+    return "Moderate mixed workload"
+
+def storage_insight(metrics):
+    disk_usage = metrics.get("disk_usage", 0.0)
+    storage_health = metrics.get("storage_health", 100)
+    disk_write_per_sec = metrics.get("disk_write_per_sec", 0.0)
+
+    if disk_usage >= 95 or storage_health <= 50:
+        return "Critical free-space pressure"
+    if disk_write_per_sec > 700:
+        return "Heavy write activity detected"
+    if disk_usage >= 85 or storage_health <= 75:
+        return "Storage getting tight"
+    return "Storage pressure low"
+
 def truncate_display(text, max_width):
     plain_width = len(strip_ansi(text))
     if plain_width <= max_width:
@@ -672,16 +745,16 @@ VARIATIONS = {
     "doctor": {
         "mode": "doctor",
         "compact": False,
-        "show_cores": False,
+        "show_cores": True,
         "show_io_details": True,
-        "show_net_details": False,
+        "show_net_details": True,
         "show_uptime": True,
         "show_load_average": True,
         "show_swap": True,
         "show_power_details": True,
         "show_storage_health": True,
         "show_stability_avg": True,
-        "health_trend_width": "short",
+        "health_trend_width": "normal",
         "bar_profile": "normal",
         "health_why_limit": 4,
     },
@@ -766,6 +839,25 @@ def compact_dual_metric_row(left_label, left_value, right_label, right_value, wi
     left = f"{left_label:<6} {left_value:>6}"
     right = f"{right_label:<6} {right_value:>7}"
     content = f"{left}    {right}"
+    return panel_line(truncate_display(content, width - 4), width)
+
+def doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=0.6):
+    # Balanced two-column row for doctor mode: clean spacing first, then safe truncation.
+    inner_width = max(24, width - 4)
+    separator = f" {colorize('│', 'dim')} "
+    sep_width = len(strip_ansi(separator))
+    gutter = 2
+    available = max(20, inner_width - sep_width - gutter)
+    left_ratio = max(0.45, min(0.72, left_ratio))
+    left_width = int(available * left_ratio)
+    right_width = available - left_width
+
+    left_content = f"{left_label:<9} {left_value}"
+    right_content = f"{right_label:<9} {right_value}"
+    left = truncate_display(left_content, left_width)
+    right = truncate_display(right_content, right_width)
+
+    content = f"{left:<{left_width}}{separator}{right:<{right_width}}"
     return panel_line(truncate_display(content, width - 4), width)
 
 def detect_pi_model():
@@ -1060,9 +1152,21 @@ def render_dashboard(metrics, state, view, refresh_interval):
     if view.get("mode") == "doctor":
         lines.append(divider(width))
         lines.append(section_title("DOCTOR INSIGHT", width))
-        lines.append(metric_row("Pi Model", metrics["pi_model"], width=width))
-        lines.append(metric_row("Arch", metrics["architecture"], width=width))
-        lines.append(metric_row("Total RAM", f"{metrics['total_ram_gb']:.1f}", "GiB", width=width))
+        doctor_pairs = [
+            ("Cooling", metrics["cooling_status"], "Power", metrics["power_stability"]),
+            ("Workload", metrics["workload_profile"], "Storage", metrics["storage_insight"]),
+            ("Pi Model", metrics["pi_model"], "Arch", metrics["architecture"]),
+            ("Total RAM", f"{metrics['total_ram_gb']:.1f} GiB", "Alerts", f"{len(metrics.get('active_alerts', []))}"),
+        ]
+        left_lengths = [len(f"{label:<9} {value}") for label, value, _, _ in doctor_pairs]
+        right_lengths = [len(f"{label:<9} {value}") for _, _, label, value in doctor_pairs]
+        max_left = max(left_lengths) if left_lengths else 20
+        max_right = max(right_lengths) if right_lengths else 20
+        total = max_left + max_right
+        dynamic_ratio = (max_left / total) if total else 0.6
+        dynamic_ratio = max(0.45, min(0.72, dynamic_ratio))
+        for left_label, left_value, right_label, right_value in doctor_pairs:
+            lines.append(doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=dynamic_ratio))
         lines.append(metric_row("Top CPU Proc", metrics["top_cpu_process"], width=width))
         lines.append(metric_row("Top RAM Proc", metrics["top_mem_process"], width=width))
         active_alerts = metrics.get("active_alerts", [])
@@ -1153,7 +1257,7 @@ def collect_metrics(state, boot_time):
         pass
     state.last_top_cpu_process = top_cpu_process
 
-    return {
+    metrics = {
         "temperature": temperature,
         "frequency": frequency,
         "throttle": throttle,
@@ -1179,6 +1283,11 @@ def collect_metrics(state, boot_time):
         "top_cpu_process": top_cpu_process,
         "top_mem_process": top_mem_process,
     }
+    metrics["cooling_status"] = cooling_assessment(metrics)
+    metrics["power_stability"] = power_stability_assessment(metrics, state)
+    metrics["workload_profile"] = workload_profile(metrics)
+    metrics["storage_insight"] = storage_insight(metrics)
+    return metrics
 
 def snapshot_to_text(metrics):
     plain = [
