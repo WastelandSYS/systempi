@@ -16,8 +16,21 @@ from pathlib import Path
 import psutil
 
 # Constants
+# Fallback thermal thresholds used when no model-specific profile is available.
 TEMP_WARNING = 60
 TEMP_CRITICAL = 75
+# Model-aware thermal interpretation profiles.
+# These values adjust health scoring and warning thresholds only.
+# Raw telemetry still comes directly from Raspberry Pi firmware utilities.
+# Pi 5 values are conservative estimates and may be refined with future hardware testing.
+PI_THERMAL_PROFILES = {
+    "default": {"warning": 60, "critical": 75, "health_temp_start": 50, "health_penalty": 1.2},
+    "pi3": {"warning": 60, "critical": 75, "health_temp_start": 50, "health_penalty": 1.2},
+    "pi4": {"warning": 60, "critical": 75, "health_temp_start": 50, "health_penalty": 1.2},
+    "pi400": {"warning": 65, "critical": 78, "health_temp_start": 55, "health_penalty": 1.0},
+    "pi5": {"warning": 70, "critical": 82, "health_temp_start": 60, "health_penalty": 0.9},
+    "zero2": {"warning": 60, "critical": 75, "health_temp_start": 50, "health_penalty": 1.2},
+}
 CPU_THRESHOLD_LOW = 60
 CPU_THRESHOLD_MEDIUM = 85
 RESET = "\033[0m"
@@ -389,14 +402,19 @@ def colored_core(value):
     index = int((max(0, min(100, value)) / 100) * (len(blocks) - 1))
     return colorize(blocks[index], color)
 
-def sparkline(values, width=24):
+def sparkline(values, width=24, fixed_min=None, fixed_max=None):
     if not values:
         return ""
 
     samples = values[-width:]
     blocks = "▁▂▃▄▅▆▇█"
-    low = min(samples)
-    high = max(samples)
+
+    if fixed_min is not None and fixed_max is not None:
+        low = fixed_min
+        high = fixed_max
+    else:
+        low = min(samples)
+        high = max(samples)
 
     if high == low:
         return colorize(blocks[0] * len(samples), "green")
@@ -471,7 +489,7 @@ def get_swap_usage():
     except Exception:
         return 0.0
 
-def calculate_system_health(cpu, temp, mem, disk, throttle):
+def calculate_system_health(cpu, temp, mem, disk, throttle, thermal_profile):
     health = 100.0
 
     # CPU (continuous penalty)
@@ -480,8 +498,8 @@ def calculate_system_health(cpu, temp, mem, disk, throttle):
 
     # Temperature (only above safe zone)
     if temp is not None:
-        temp_excess = max(0, temp - 50)
-        health -= temp_excess * 1.2
+        temp_excess = max(0, temp - thermal_profile["health_temp_start"])
+        health -= temp_excess * thermal_profile["health_penalty"]
 
     # Memory (continuous)
     ram_pressure = max(0, mem - 60)
@@ -505,11 +523,11 @@ def get_cpu_cores():
     except Exception:
         return []
 
-def health_explainability(cpu, temp, mem, disk, throttle):
+def health_explainability(cpu, temp, mem, disk, throttle, temp_warning):
     reasons = []
     if cpu > 80:
         reasons.append(f"CPU pressure {cpu:.1f}%")
-    if temp is not None and temp > TEMP_WARNING:
+    if temp is not None and temp > temp_warning:
         reasons.append(f"Temp high {temp:.1f}C")
     if mem > 80:
         reasons.append(f"RAM high {mem:.1f}%")
@@ -585,11 +603,14 @@ def cooling_assessment(metrics):
 
     if temperature is None:
         return "Pi temperature unavailable"
-    if temperature >= TEMP_CRITICAL or (temperature >= TEMP_WARNING + 8 and cpu_load >= 85):
+    temp_warning = metrics.get("temp_warning", TEMP_WARNING)
+    temp_critical = metrics.get("temp_critical", TEMP_CRITICAL)
+
+    if temperature >= temp_critical or (temperature >= temp_warning + 8 and cpu_load >= 85):
         return "Critical thermal pressure"
-    if temperature >= TEMP_WARNING + 5 and cpu_load >= 70:
+    if temperature >= temp_warning + 5 and cpu_load >= 70:
         return "Cooling struggling under load"
-    if temperature >= TEMP_WARNING or cpu_load >= 70:
+    if temperature >= temp_warning or cpu_load >= 70:
         return "Warm but manageable"
     return "Thermals stable"
 
@@ -869,6 +890,24 @@ def detect_pi_model():
         pass
     return "Unknown"
 
+
+
+def thermal_profile_for_model(model):
+    model_lower = (model or "").lower()
+
+    if "raspberry pi 5" in model_lower:
+        return "pi5", PI_THERMAL_PROFILES["pi5"]
+    if "raspberry pi 400" in model_lower:
+        return "pi400", PI_THERMAL_PROFILES["pi400"]
+    if "raspberry pi 4" in model_lower:
+        return "pi4", PI_THERMAL_PROFILES["pi4"]
+    if "raspberry pi 3" in model_lower:
+        return "pi3", PI_THERMAL_PROFILES["pi3"]
+    if "raspberry pi zero 2" in model_lower:
+        return "zero2", PI_THERMAL_PROFILES["zero2"]
+
+    return "default", PI_THERMAL_PROFILES["default"]
+
 def evaluate_alerts(metrics):
     alerts = []
     if metrics["cpu_load"] >= 90:
@@ -877,7 +916,7 @@ def evaluate_alerts(metrics):
         alerts.append("high_ram")
     if metrics["disk_usage"] >= 95:
         alerts.append("high_disk")
-    if metrics["temperature"] is not None and metrics["temperature"] >= TEMP_CRITICAL:
+    if metrics["temperature"] is not None and metrics["temperature"] >= metrics.get("temp_critical", TEMP_CRITICAL):
         alerts.append("high_temp")
     if metrics["disk_write_per_sec"] >= 1024:
         alerts.append("heavy_disk_write")
@@ -926,7 +965,7 @@ def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_
     if metrics["temperature"] is None:
         lines.append(metric_row("CPU Temp", "N/A", width=width))
     else:
-        temp_badge = status_badge(metrics["temperature"], TEMP_WARNING, TEMP_CRITICAL)
+        temp_badge = status_badge(metrics["temperature"], metrics["temp_warning"], metrics["temp_critical"])
         lines.append(metric_row("CPU Temp", f"{metrics['temperature']:.1f}", "°C", bar=" " * minimal_bar, badge=temp_badge, color=temp_badge[1], width=width))
 
     disk_badge = status_badge(metrics["disk_usage"], 80, 95)
@@ -944,12 +983,12 @@ def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_
     health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
     lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], bar_width, 80, 50, inverse=True), badge=health_badge, color=health_badge[1], width=width))
     lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], effective_view.get("health_why_limit", 2)), width))
-    lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Minimal essentials", "dim"), width))
+    lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Minimal monitoring", "dim"), width))
 
 def render_compact_dashboard(lines, metrics, state, width, bar_width):
     cpu_color = severity_color(metrics["cpu_load"], CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM)
     temp_value = "N/A" if metrics["temperature"] is None else f"{metrics['temperature']:.0f}C"
-    temp_color = "white" if metrics["temperature"] is None else severity_color(metrics["temperature"], TEMP_WARNING, TEMP_CRITICAL)
+    temp_color = "white" if metrics["temperature"] is None else severity_color(metrics["temperature"], metrics["temp_warning"], metrics["temp_critical"])
     mem_color = severity_color(metrics["mem_percent"], 70, 90)
     disk_color = severity_color(metrics["disk_usage"], 80, 95)
     net_total = metrics["network_sent_per_sec"] + metrics["network_recv_per_sec"]
@@ -972,11 +1011,16 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
     lines.append(metric_row("Net Total", f"{net_total:.2f}", "KiB/s", color="white", width=width))
     lines.append(divider(width))
     lines.append(section_title("COMPACT HEALTH", width))
-    trend = sparkline(state.health_history, width=max(8, min(12, width - 24)))
+    trend = sparkline(
+        state.health_history,
+        width=max(8, min(12, width - 24)),
+        fixed_min=0,
+        fixed_max=100,
+    )
     lines.append(key_value_line("Trend", trend, width, label_width=18))
     lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], compact_bar, 80, 50, inverse=True), color=health_color, width=width))
     lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], 2), width))
-    lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Compact snapshot", "dim"), width))
+    lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Compact monitoring", "dim"), width))
 
 def render_dashboard(metrics, state, view, refresh_interval):
     terminal_width = shutil.get_terminal_size((88, 24)).columns
@@ -1025,7 +1069,7 @@ def render_dashboard(metrics, state, view, refresh_interval):
     if metrics["temperature"] is None:
         lines.append(metric_row("CPU Temp", "N/A", width=width))
     else:
-        temp_badge = status_badge(metrics["temperature"], TEMP_WARNING, TEMP_CRITICAL)
+        temp_badge = status_badge(metrics["temperature"], metrics["temp_warning"], metrics["temp_critical"])
         lines.append(metric_row(
             "CPU Temp",
             f"{metrics['temperature']:.1f}",
@@ -1111,7 +1155,12 @@ def render_dashboard(metrics, state, view, refresh_interval):
 
     trend_width = choose_trend_width(width, effective_view.get("health_trend_width", "normal"))
     if trend_width > 0:
-        trend = sparkline(list(state.history["health"]), width=trend_width)
+        trend = sparkline(
+            list(state.history["health"]),
+            width=trend_width,
+            fixed_min=0,
+            fixed_max=100,
+        )
         lines.append(key_value_line("Health Trend", trend, width, label_width=34))
     if metrics["temperature"] is not None and view.get("mode") in ("balanced", "doctor"):
         temp_trend = sparkline(list(state.history["temp"]), width=max(8, min(16, width - 24)))
@@ -1155,7 +1204,7 @@ def render_dashboard(metrics, state, view, refresh_interval):
         doctor_pairs = [
             ("Cooling", metrics["cooling_status"], "Power", metrics["power_stability"]),
             ("Workload", metrics["workload_profile"], "Storage", metrics["storage_insight"]),
-            ("Pi Model", metrics["pi_model"], "Arch", metrics["architecture"]),
+            ("System", f"{metrics['pi_model']} [{metrics['thermal_profile_name']}]", "Arch", metrics["architecture"]),
             ("Total RAM", f"{metrics['total_ram_gb']:.1f} GiB", "Alerts", f"{len(metrics.get('active_alerts', []))}"),
         ]
         left_lengths = [len(f"{label:<9} {value}") for label, value, _, _ in doctor_pairs]
@@ -1184,6 +1233,8 @@ def format_uptime(seconds):
 
 def collect_metrics(state, boot_time):
     temperature, frequency, throttle = get_pi_stats()
+    pi_model = detect_pi_model()
+    thermal_profile_name, thermal_profile = thermal_profile_for_model(pi_model)
     mem_percent = psutil.virtual_memory().percent
     core_loads = psutil.cpu_percent(interval=None, percpu=True)
 
@@ -1202,7 +1253,8 @@ def collect_metrics(state, boot_time):
         temperature,
         mem_percent,
         disk_usage,
-        throttle
+        throttle,
+        thermal_profile
     )
 
     state.health_history.append(system_health)
@@ -1276,8 +1328,11 @@ def collect_metrics(state, boot_time):
         "system_stability": system_stability,
         "storage_health": storage_health,
         "uptime": format_uptime(time.time() - boot_time),
-        "health_why": health_explainability(cpu_load, temperature, mem_percent, disk_usage, throttle),
-        "pi_model": detect_pi_model(),
+        "health_why": health_explainability(cpu_load, temperature, mem_percent, disk_usage, throttle, thermal_profile["warning"]),
+        "pi_model": pi_model,
+        "thermal_profile_name": thermal_profile_name,
+        "temp_warning": thermal_profile["warning"],
+        "temp_critical": thermal_profile["critical"],
         "architecture": platform.machine(),
         "total_ram_gb": psutil.virtual_memory().total / (1024**3),
         "top_cpu_process": top_cpu_process,
