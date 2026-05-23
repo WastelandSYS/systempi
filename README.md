@@ -44,45 +44,83 @@ Each variation is designed for a different monitoring workflow — from lightwei
 
 # SCREENSHOTS / THEMES
 
-## Default Theme
+## Balanced Mode — Main Dashboard
 
-<img width="900" height="650" alt="defaultdash" src="https://github.com/user-attachments/assets/27e92036-a499-4738-bcae-c0f8a6c846b2" />
+```bash
+systempi --variation balanced --theme wasteland
+```
+
+<img YOUR_BALANCED_WASTELAND_IMAGE />
+
+---
+
+## Doctor Mode — Diagnostic & Alert Intelligence
+
+```bash
+systempi --variation doctor --theme vaulttec
+```
+
+<img YOUR_DOCTOR_VAULTTEC_IMAGE />
+
+---
+
+## Compact Mode — Smaller Terminal Optimized
+
+```bash
+systempi --variation compact --theme crt
+```
+
+<img YOUR_COMPACT_CRT_IMAGE />
+
+---
+
+## Minimal Mode — Essential Clean Monitoring
+
+```bash
+systempi --variation minimal --theme ice
+```
+
+<img YOUR_MINIMAL_ICE_IMAGE />
 
 ---
 
 ## Matrix Theme
 
-<img width="900" height="650" alt="matrix1" src="https://github.com/user-attachments/assets/7ae45ea8-e6a3-4618-843e-d523574df46a" />
+```bash
+systempi --theme matrix
+```
+
+<img YOUR_MATRIX_IMAGE />
+
+---
+
+## Biohazard Theme
+
+```bash
+systempi --variation doctor --theme biohazard
+```
+
+<img YOUR_BIOHAZARD_IMAGE />
 
 ---
 
 ## Ocean Theme
 
-<img width="900" height="650" alt="ocean-1" src="https://github.com/user-attachments/assets/fa7e244d-de45-41b6-9ae1-1f38fdb7f826" />
+```bash
+systempi --theme ocean
+```
+
+<img YOUR_OCEAN_IMAGE />
 
 ---
 
-## Lava Theme
+## Synthwave Theme
 
-<img width="900" height="650" alt="lava" src="https://github.com/user-attachments/assets/b0d0fd05-9b7a-4c96-ab43-ea4e5cc0e986" />
+```bash
+systempi --theme synthwave
+```
 
----
-
-## Wasteland Theme
-
-<img width="900" height="650" alt="wastes" src="https://github.com/user-attachments/assets/7ff5fbd9-5b2b-42df-b350-a80133fc4b9c" />
-
----
-
-## Mono Theme
-
-<img width="900" height="650" alt="mono" src="https://github.com/user-attachments/assets/51e3364b-1644-468a-ac51-d259d865a64f" />
-
----
-
-## Girly Theme
-
-<img width="900" height="650" alt="girly" src="https://github.com/user-attachments/assets/0da1e9b1-b0ed-4776-be4e-4134e9a9ffe5" />
+<img YOUR_SYNTHWAVE_IMAGE />
 
 ---
 
