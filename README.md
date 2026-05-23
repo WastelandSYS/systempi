@@ -40,6 +40,7 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 | Doctor | Diagnostic & alert-focused mode |
 
 Each variation is designed for a different monitoring workflow — from lightweight minimal monitoring to deep diagnostic analysis.
+
 ---
 
 # SCREENSHOTS / THEMES
