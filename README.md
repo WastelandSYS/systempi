@@ -308,7 +308,7 @@ The dashboard focuses on:
 
 # LICENSE
 
-MIT License ( Coming soon)
+GNU GPL v3 License
 
 ---
 
