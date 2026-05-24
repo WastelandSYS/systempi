@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 
+# =========================================================
+# systempi
+# Real-time Raspberry Pi monitoring dashboard
+#
+# Copyright (c) 2026 WastelandSYS
+# Licensed under GPLv3
+# =========================================================
+
 import argparse
 import json
 import os
