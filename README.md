@@ -308,7 +308,7 @@ The dashboard focuses on:
 
 # LICENSE
 
-GNU GPL v3 License
+Systempi is released under the GNU General Public License v3.0. See [`LICENSE`](LICENSE) for the full license text.
 
 ---
 
