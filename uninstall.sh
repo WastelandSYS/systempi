@@ -4,6 +4,13 @@ set -euo pipefail
 
 SYSTEMPI_BIN="/usr/local/bin/systempi"
 REMOVE_DEPS=false
+OPTIONAL_PACKAGES=(
+    python3-psutil
+    raspi-utils-core
+    raspi-utils-dt
+    raspberrypi-utils
+    libraspberrypi-bin
+)
 
 show_help() {
     cat <<HELP
@@ -13,8 +20,8 @@ Usage:
   sudo ./uninstall.sh [--remove-deps]
 
 Options:
-  --remove-deps   Also remove packages install.sh may have installed for SystemPi
-                  (python3-psutil plus any available vcgencmd package).
+  --remove-deps   Also remove packages install.sh may have installed only when
+                  apt can remove them without removing other installed packages.
   -h, --help      Show this help message.
 
 This removes the systempi command shortcut. It does not delete your cloned
@@ -45,33 +52,61 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-if [ -L "$SYSTEMPI_BIN" ]; then
-    rm -f "$SYSTEMPI_BIN"
-    echo "Removed shortcut: $SYSTEMPI_BIN"
-elif [ -e "$SYSTEMPI_BIN" ]; then
-    echo "Warning: $SYSTEMPI_BIN exists but is not a symlink."
-    echo "Leaving it in place so this script does not delete an unrelated file."
-else
-    echo "Shortcut not found: $SYSTEMPI_BIN"
-fi
+package_installed() {
+    local package="$1"
+    local status
 
-if [ "$REMOVE_DEPS" = true ]; then
+    status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+    [ "$status" = "install ok installed" ]
+}
+
+safe_remove_package() {
+    local package="$1"
+    local planned
+
+    if ! package_installed "$package"; then
+        return
+    fi
+
+    planned="$(apt-get -s remove "$package" 2>/dev/null | awk '/^Remv / {print $2}' || true)"
+
+    if [ "$planned" = "$package" ]; then
+        apt-get remove -y "$package" || true
+        return
+    fi
+
+    echo "Skipping dependency removal for $package because apt would remove additional packages."
+}
+
+remove_shortcut() {
+    if [ -L "$SYSTEMPI_BIN" ]; then
+        rm -f "$SYSTEMPI_BIN"
+        echo "Removed shortcut: $SYSTEMPI_BIN"
+    elif [ -e "$SYSTEMPI_BIN" ]; then
+        echo "Warning: $SYSTEMPI_BIN exists but is not a symlink."
+        echo "Leaving it in place so this script does not delete an unrelated file."
+    else
+        echo "Shortcut not found: $SYSTEMPI_BIN"
+    fi
+}
+
+remove_optional_dependencies() {
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get remove -y python3-psutil || true
+        for package in "${OPTIONAL_PACKAGES[@]}"; do
+            safe_remove_package "$package"
+        done
 
-        if apt-cache show libraspberrypi-bin >/dev/null 2>&1; then
-            apt-get remove -y libraspberrypi-bin || true
-        fi
-
-        if apt-cache show raspberrypi-utils >/dev/null 2>&1; then
-            apt-get remove -y raspberrypi-utils || true
-        fi
-
-        apt-get autoremove -y
         echo "Removed optional SystemPi dependencies."
+        echo "Run 'sudo apt autoremove' manually if you want to review unused packages."
     else
         echo "Warning: apt-get not found. Skipping dependency removal."
     fi
+}
+
+remove_shortcut
+
+if [ "$REMOVE_DEPS" = true ]; then
+    remove_optional_dependencies
 fi
 
 echo "SystemPi uninstall complete."
