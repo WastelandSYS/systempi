@@ -5,6 +5,7 @@ set -euo pipefail
 SYSTEMPI_BIN="/usr/local/bin/systempi"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYSTEMPI_SCRIPT="$REPO_DIR/systempi.py"
+BASE_PACKAGES=(python3 python3-psutil)
 
 show_help() {
     cat <<HELP
@@ -55,24 +56,75 @@ if ! command -v apt-get >/dev/null 2>&1; then
     exit 1
 fi
 
+detect_os_codename() {
+    local codename="unknown"
+
+    if [ -r /etc/os-release ]; then
+        . /etc/os-release
+        codename="${VERSION_CODENAME:-unknown}"
+    fi
+
+    printf '%s\n' "$codename"
+}
+
+package_installable() {
+    local package="$1"
+    local candidate
+
+    candidate="$(apt-cache policy "$package" 2>/dev/null | awk '/^[[:space:]]*Candidate:/ {print $2; exit}' || true)"
+    [ -n "$candidate" ] && [ "$candidate" != "(none)" ]
+}
+
+install_packages() {
+    apt-get install -y "$@"
+}
+
+install_raspberry_pi_tools() {
+    local codename
+    local packages=()
+
+    codename="$(detect_os_codename)"
+
+    if package_installable raspi-utils-core; then
+        packages=(raspi-utils-core)
+        if package_installable raspi-utils-dt; then
+            packages+=(raspi-utils-dt)
+        fi
+    elif package_installable raspberrypi-utils; then
+        packages=(raspberrypi-utils)
+    elif package_installable libraspberrypi-bin; then
+        packages=(libraspberrypi-bin)
+    fi
+
+    if [ "${#packages[@]}" -gt 0 ]; then
+        echo "Installing Raspberry Pi utilities for ${codename}: ${packages[*]}"
+        install_packages "${packages[@]}"
+    else
+        echo "Info: No installable Raspberry Pi vcgencmd package found in apt repositories on this system."
+        echo "      SystemPi will still run; Pi-specific telemetry may show as unavailable."
+    fi
+}
+
+install_python_requirements() {
+    if python3 -c "import psutil" >/dev/null 2>&1; then
+        echo "Python requirements already satisfied."
+        return
+    fi
+
+    install_packages python3-pip
+
+    if python3 -m pip install --help 2>/dev/null | grep -q -- "--break-system-packages"; then
+        python3 -m pip install --break-system-packages -r "$REPO_DIR/requirements.txt"
+    else
+        python3 -m pip install -r "$REPO_DIR/requirements.txt"
+    fi
+}
+
 apt-get update
-apt-get install -y python3 python3-pip python3-psutil
+install_packages "${BASE_PACKAGES[@]}"
 
-# Raspberry Pi tooling package name differs across distros/repos.
-if apt-cache show libraspberrypi-bin >/dev/null 2>&1; then
-    apt-get install -y libraspberrypi-bin
-elif apt-cache show raspberrypi-utils >/dev/null 2>&1; then
-    apt-get install -y raspberrypi-utils
-else
-    echo "Info: No Raspberry Pi vcgencmd package found in apt repositories on this system."
-    echo "      SystemPi will still run; Pi-specific telemetry may show as unavailable."
-fi
-
-# Install Python dependencies from requirements.txt.
-# Debian/Kali can enforce externally-managed Python; use fallback if needed.
-if ! python3 -m pip install -r "$REPO_DIR/requirements.txt"; then
-    python3 -m pip install --break-system-packages -r "$REPO_DIR/requirements.txt"
-fi
+install_raspberry_pi_tools
+install_python_requirements
 
 chmod +x "$SYSTEMPI_SCRIPT"
 ln -sf "$SYSTEMPI_SCRIPT" "$SYSTEMPI_BIN"
