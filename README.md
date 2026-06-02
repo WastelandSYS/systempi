@@ -51,7 +51,7 @@ Each variation is designed for a different monitoring workflow — from lightwei
 systempi --variation balanced --theme wasteland
 ```
 
-##### Note, you may use `--variant` instead of `--variation` if your muscle memory can't be changed.
+##### Note: `--variant` and `--var` may also be used as aliases for `--variation`.
 
 <p align="center">
 <img width="707" height="587" alt="systempi-balanced-wasteland" src="https://github.com/user-attachments/assets/ecc2e8d9-084e-409f-9e92-f50b5717346a" />
