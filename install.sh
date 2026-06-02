@@ -107,17 +107,14 @@ install_raspberry_pi_tools() {
 
 install_python_requirements() {
     if python3 -c "import psutil" >/dev/null 2>&1; then
-        echo "Python requirements already satisfied."
+        echo "Python requirements verified."
         return
     fi
 
-    install_packages python3-pip
-
-    if python3 -m pip install --help 2>/dev/null | grep -q -- "--break-system-packages"; then
-        python3 -m pip install --break-system-packages -r "$REPO_DIR/requirements.txt"
-    else
-        python3 -m pip install -r "$REPO_DIR/requirements.txt"
-    fi
+    echo "Error: python3-psutil was installed, but psutil is not importable."
+    echo "Try running:"
+    echo "  sudo apt-get install --reinstall python3-psutil"
+    exit 1
 }
 
 apt-get update
