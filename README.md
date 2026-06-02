@@ -51,7 +51,9 @@ Each variation is designed for a different monitoring workflow — from lightwei
 systempi --variation balanced --theme wasteland
 ```
 
+<p align="center">
 <img width="707" height="587" alt="systempi-balanced-wasteland" src="https://github.com/user-attachments/assets/ecc2e8d9-084e-409f-9e92-f50b5717346a" />
+</p>
 
 ---
 
@@ -61,7 +63,9 @@ systempi --variation balanced --theme wasteland
 systempi --variation doctor --theme vaulttec
 ```
 
+<p align="center">
 <img width="707" height="790" alt="systempi-doctor-vaulttec" src="https://github.com/user-attachments/assets/2a310ce0-08ca-4104-b9eb-a1f7b238f1e5" />
+</p>
 
 ---
 
@@ -71,7 +75,9 @@ systempi --variation doctor --theme vaulttec
 systempi --variation compact --theme crt
 ```
 
+<p align="center">
 <img width="626" height="330" alt="systempi-compact-crt" src="https://github.com/user-attachments/assets/15522d49-3ce9-44e9-9f87-0a925cb629b3" />
+</p>
 
 ---
 
@@ -81,7 +87,9 @@ systempi --variation compact --theme crt
 systempi --variation minimal --theme ice
 ```
 
+<p align="center">
 <img width="611" height="245" alt="systempi-minimal-ice" src="https://github.com/user-attachments/assets/7b835ada-2917-46c3-bb1a-add97d040d4f" />
+</p>
 
 ---
 
@@ -91,7 +99,9 @@ systempi --variation minimal --theme ice
 systempi --theme matrix
 ```
 
+<p align="center">
 <img width="685" height="571" alt="systempi-balanced-matrix" src="https://github.com/user-attachments/assets/d30732d4-3f3d-47a5-990d-33f65811a532" />
+</p>
 
 ---
 
@@ -101,7 +111,9 @@ systempi --theme matrix
 systempi --variation doctor --theme biohazard
 ```
 
+<p align="center">
 <img width="707" height="792" alt="systempi-doctor-biohazard" src="https://github.com/user-attachments/assets/c25075e2-5d8c-4a21-9199-de59fa2f8526" />
+</p>
 
 ---
 
@@ -111,7 +123,9 @@ systempi --variation doctor --theme biohazard
 systempi --theme ocean
 ```
 
+<p align="center">
 <img width="707" height="586" alt="systempi-balanced-ocean" src="https://github.com/user-attachments/assets/2620435d-092b-4e43-8988-c7ca2e42dfe4" />
+</p>
 
 ---
 
@@ -121,7 +135,9 @@ systempi --theme ocean
 systempi --theme synthwave
 ```
 
+<p align="center">
 <img width="707" height="586" alt="systempi-balanced-synthwave" src="https://github.com/user-attachments/assets/b8e25d24-1b99-43af-b4c8-74a3cc3a5173" />
+</p>
 
 ---
 
