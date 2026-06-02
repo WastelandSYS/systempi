@@ -1383,6 +1383,8 @@ def parse_args():
     parser.add_argument("--history", action="store_true", help="print recent alert event history and exit")
     parser.add_argument(
         "--variation",
+        "--variant",
+        "--var",
         choices=sorted(VARIATIONS.keys()),
         default="balanced",
         help=(
