@@ -1384,6 +1384,7 @@ def parse_args():
     parser.add_argument(
         "--variation",
         "--variant",
+        "--var",
         choices=sorted(VARIATIONS.keys()),
         default="balanced",
         help=(
