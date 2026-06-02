@@ -1382,6 +1382,7 @@ def parse_args():
     parser.add_argument("--watch", action="store_true", help="enable background alert event logging")
     parser.add_argument("--history", action="store_true", help="print recent alert event history and exit")
     parser.add_argument(
+        "--variant",
         "--variation",
         choices=sorted(VARIATIONS.keys()),
         default="balanced",
