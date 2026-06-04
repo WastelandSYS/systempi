@@ -290,6 +290,7 @@ systempi -h
 - synthwave
 - ice
 - biohazard
+- raspberrypi
 
 ---
 
