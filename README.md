@@ -95,14 +95,14 @@ systempi --variation minimal --theme ice
 
 ---
 
-## Matrix Theme
+## Raspberrypi Theme
 
 ```bash
-systempi --theme matrix
+systempi --theme raspberrypi
 ```
 
 <p align="center">
-<img width="685" height="571" alt="systempi-balanced-matrix" src="https://github.com/user-attachments/assets/d30732d4-3f3d-47a5-990d-33f65811a532" />
+<img width="705" height="585" alt="systempiBalancedRaspberryPi" src="https://github.com/user-attachments/assets/720fa70b-5af7-46a4-9116-519d3d510fb0" />
 </p>
 
 ---
