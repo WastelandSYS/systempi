@@ -12,10 +12,13 @@ import argparse
 import json
 import os
 import platform
+import pty
 import re
+import select
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -236,6 +239,8 @@ class SystemState:
         self.session_alert_counts = {}
         self.event_log_path = default_log_path()
         self.last_top_cpu_process = "N/A"
+        self.hailo_monitor = HailoMonitor()
+        self.hailo_monitor.start()
 
 def default_log_path():
     home = Path.home()
@@ -251,6 +256,110 @@ def run_vcgencmd(args):
         ).strip()
     except Exception:
         return None
+
+class HailoMonitor:
+    """Background thread that keeps hailortcli monitor running and caches the latest NPU stats."""
+
+    _HEADER_RE = re.compile(r"NNC Utilization")
+    _DATA_RE = re.compile(
+        r"pci/[\w:.]+\s+"          # device id
+        r"\w+\s+"                   # architecture
+        r"([\d.]+)\s+"              # nnc_util
+        r"([\d.]+)\s+"              # cpu_util
+        r"([\d.]+)\s+"              # ram_util
+        r"(\d+)\s*/\s*(\d+)\s+"    # ram_used / ram_total
+        r"([\d.]+)\s+"              # temp_c
+        r"(\d+)"                    # voltage_mv
+    )
+
+    def __init__(self):
+        self._stats = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
+        self.available = shutil.which("hailortcli") is not None
+
+    def start(self):
+        if not self.available:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        master = None
+        proc = None
+        try:
+            master, slave = pty.openpty()
+            proc = subprocess.Popen(
+                ["hailortcli", "monitor"],
+                stdout=slave,
+                stderr=slave,
+            )
+            os.close(slave)
+            buf = b""
+            while not self._stop.is_set():
+                ready, _, _ = select.select([master], [], [], 0.2)
+                if not ready:
+                    continue
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
+                buf += chunk
+                # Strip ANSI escape sequences and scan completed lines
+                text = re.sub(rb"\033\[[0-9;?]*[a-zA-Z]", b"", buf)
+                lines = text.split(b"\n")
+                buf = lines[-1]  # keep incomplete trailing chunk
+                for raw in lines[:-1]:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    m = self._DATA_RE.search(line)
+                    if m:
+                        stats = {
+                            "nnc_util":    float(m.group(1)),
+                            "cpu_util":    float(m.group(2)),
+                            "ram_util":    float(m.group(3)),
+                            "ram_used_mb": int(m.group(4)),
+                            "ram_total_mb":int(m.group(5)),
+                            "temp_c":      float(m.group(6)),
+                            "voltage_mv":  int(m.group(7)),
+                        }
+                        with self._lock:
+                            self._stats = stats
+        except Exception:
+            pass
+        finally:
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            if master is not None:
+                try:
+                    os.close(master)
+                except OSError:
+                    pass
+
+    def get_stats(self):
+        with self._lock:
+            return dict(self._stats) if self._stats else None
+
+    def wait_ready(self, timeout=2.0):
+        """Block until first stats arrive or timeout. No-op when unavailable."""
+        if not self.available:
+            return
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with self._lock:
+                if self._stats is not None:
+                    return
+            time.sleep(0.05)
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+
 
 def get_pi_stats():
     try:
@@ -508,7 +617,10 @@ def get_swap_usage():
     except Exception:
         return 0.0
 
-def calculate_system_health(cpu, temp, mem, disk, throttle, thermal_profile):
+HAILO_TEMP_WARNING = 75
+HAILO_TEMP_CRITICAL = 90
+
+def calculate_system_health(cpu, temp, mem, disk, throttle, thermal_profile, hailo_temp=None):
     health = 100.0
 
     # CPU (continuous penalty)
@@ -519,6 +631,11 @@ def calculate_system_health(cpu, temp, mem, disk, throttle, thermal_profile):
     if temp is not None:
         temp_excess = max(0, temp - thermal_profile["health_temp_start"])
         health -= temp_excess * thermal_profile["health_penalty"]
+
+    # NPU temperature (Hailo-10H: warning 75°C, critical 90°C, max ~105°C)
+    if hailo_temp is not None:
+        hailo_excess = max(0, hailo_temp - HAILO_TEMP_WARNING)
+        health -= hailo_excess * 1.0
 
     # Memory (continuous)
     ram_pressure = max(0, mem - 60)
@@ -1165,6 +1282,46 @@ def render_dashboard(metrics, state, view, refresh_interval):
         net_trend = sparkline(list(state.history["net"]), width=max(8, min(16, width - 24)))
         lines.append(key_value_line("Net Trend", net_trend, width))
 
+    if metrics["hailo_available"]:
+        lines.append(divider(width))
+        lines.append(section_title("NPU / AI HAT", width))
+        nnc_badge = status_badge(metrics["hailo_nnc_util"], 70, 90)
+        lines.append(metric_row(
+            "NNC Load",
+            f"{metrics['hailo_nnc_util']:.1f}",
+            "%",
+            bar=percent_bar(metrics["hailo_nnc_util"], bar_width, 70, 90),
+            badge=nnc_badge,
+            color=nnc_badge[1],
+            width=width,
+        ))
+        if metrics["hailo_temp_c"] is not None:
+            npu_temp_badge = status_badge(metrics["hailo_temp_c"], HAILO_TEMP_WARNING, HAILO_TEMP_CRITICAL)
+            lines.append(metric_row(
+                "NPU Temp",
+                f"{metrics['hailo_temp_c']:.1f}",
+                "°C",
+                badge=npu_temp_badge,
+                color=npu_temp_badge[1],
+                width=width,
+            ))
+        if metrics["hailo_ram_used_mb"] is not None:
+            ram_label = f"{metrics['hailo_ram_used_mb']} / {metrics['hailo_ram_total_mb']} MB"
+            lines.append(metric_row(
+                "NPU RAM",
+                ram_label,
+                f"({metrics['hailo_ram_util']:.1f}%)",
+                color="white",
+                width=width,
+            ))
+        lines.append(metric_row(
+            "NPU CPU",
+            f"{metrics['hailo_cpu_util']:.1f}",
+            "%",
+            color="white",
+            width=width,
+        ))
+
     lines.append(divider(width))
     lines.append(section_title("POWER / HEALTH", width))
     if effective_view["show_power_details"] is True:
@@ -1267,13 +1424,15 @@ def collect_metrics(state, boot_time):
     system_load_avg = get_system_load_average()
     swap_percent = get_swap_usage()
 
+    hailo_snap = state.hailo_monitor.get_stats()
     system_health = calculate_system_health(
         cpu_load,
         temperature,
         mem_percent,
         disk_usage,
         throttle,
-        thermal_profile
+        thermal_profile,
+        hailo_temp=hailo_snap["temp_c"] if hailo_snap else None,
     )
 
     state.health_history.append(system_health)
@@ -1357,6 +1516,17 @@ def collect_metrics(state, boot_time):
         "top_cpu_process": top_cpu_process,
         "top_mem_process": top_mem_process,
     }
+
+    hailo = state.hailo_monitor.get_stats()
+    metrics["hailo_available"]    = hailo is not None
+    metrics["hailo_nnc_util"]     = hailo["nnc_util"]     if hailo else None
+    metrics["hailo_cpu_util"]     = hailo["cpu_util"]     if hailo else None
+    metrics["hailo_ram_util"]     = hailo["ram_util"]     if hailo else None
+    metrics["hailo_ram_used_mb"]  = hailo["ram_used_mb"]  if hailo else None
+    metrics["hailo_ram_total_mb"] = hailo["ram_total_mb"] if hailo else None
+    metrics["hailo_temp_c"]       = hailo["temp_c"]       if hailo else None
+    metrics["hailo_voltage_mv"]   = hailo["voltage_mv"]   if hailo else None
+
     metrics["cooling_status"] = cooling_assessment(metrics)
     metrics["power_stability"] = power_stability_assessment(metrics, state)
     metrics["workload_profile"] = workload_profile(metrics)
@@ -1447,6 +1617,7 @@ def main():
     renderer = TerminalRenderer()
 
     psutil.cpu_percent(interval=None)
+    state.hailo_monitor.wait_ready()
 
     if not args.once:
         renderer.start()
@@ -1480,6 +1651,7 @@ def main():
     finally:
         if not args.once:
             cleanup_terminal(renderer)
+        state.hailo_monitor.stop()
 
 
 if __name__ == "__main__":
