@@ -22,7 +22,8 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Persistent alert event logging with watch/history support
 - Lightweight active alert detection for CPU, RAM, disk, temperature, and Pi power/throttle events
 - Raspberry Pi hardware intelligence with model/arch/RAM/top-process insight rows
-- 13 built-in themes including matrix, wasteland, ocean, lava, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
+- Optional Raspberry Pi AI Hat+ (Hailo) telemetry monitoring with NPU load, temperature, memory, and utilization metrics
+- 14 built-in themes including matrix, wasteland, ocean, raspberrypi, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
 - 4 dashboard variations: Balanced, Compact, Minimal, and Doctor
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
 - Adaptive dashboard scaling based on terminal width
@@ -303,13 +304,14 @@ Tested on:
 - Raspberry Pi OS
 - Kali Linux ARM
 - Raspberry Pi 4B
+- Raspberry Pi 5
 
 Notes:
 
 - Raspberry Pi hardware metrics require `vcgencmd`.
 - General system metrics require `psutil`, which is installed by `install.sh`.
+- Raspberry Pi AI Hat+2 telemetry is automatically detected when the Hailo software stack is installed.
 - Non-Raspberry Pi systems can still provide standard CPU, memory, disk, and network metrics, but Pi-specific temperature, frequency, and throttling telemetry may show as unavailable.
-
 ---
 
 # WHY SYSTEMPI?
