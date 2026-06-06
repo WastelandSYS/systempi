@@ -18,8 +18,10 @@ import select
 import shutil
 import subprocess
 import sys
+import termios
 import threading
 import time
+import tty
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +47,7 @@ PI_THERMAL_PROFILES = {
 CPU_THRESHOLD_LOW = 60
 CPU_THRESHOLD_MEDIUM = 85
 RESET = "\033[0m"
+UPDATE_CHECK_INTERVAL = 1800
 
 THEMES = {
     "default": {
@@ -239,6 +242,11 @@ class SystemState:
         self.session_alert_counts = {}
         self.event_log_path = default_log_path()
         self.last_top_cpu_process = "N/A"
+        self.update_count = None
+        self.updates_status = "Checking..."
+        self.last_update_check = 0
+        self.update_check_running = False
+        self.update_lock = threading.Lock()
         self.hailo_monitor = HailoMonitor()
         self.hailo_monitor.start()
 
@@ -256,6 +264,65 @@ def run_vcgencmd(args):
         ).strip()
     except Exception:
         return None
+
+def run_package_update_check(state):
+    try:
+        if shutil.which("apt") is None:
+            with state.update_lock:
+                state.update_count = None
+                state.updates_status = "apt unavailable"
+                state.update_check_running = False
+            return
+
+        result = subprocess.run(
+            ["apt", "list", "--upgradable"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+
+        upgradable = [
+            line for line in result.stdout.splitlines()
+            if line and not line.startswith("Listing") and "/" in line
+        ]
+
+        with state.update_lock:
+            state.update_count = len(upgradable)
+            state.updates_status = (
+                "Up to date"
+                if state.update_count == 0
+                else f"{state.update_count} available"
+            )
+            state.update_check_running = False
+
+    except Exception:
+        with state.update_lock:
+            state.update_count = None
+            state.updates_status = "Check failed"
+            state.update_check_running = False
+
+
+def refresh_package_update_status(state):
+    now = time.time()
+
+    with state.update_lock:
+        if state.update_check_running:
+            return
+
+        if state.last_update_check != 0 and now - state.last_update_check < UPDATE_CHECK_INTERVAL:
+            return
+
+        state.last_update_check = now
+        state.updates_status = "Checking..."
+        state.update_check_running = True
+
+    threading.Thread(
+        target=run_package_update_check,
+        args=(state,),
+        daemon=True,
+    ).start()
 
 class HailoMonitor:
     """Background thread that keeps hailortcli monitor running and caches the latest NPU stats."""
@@ -560,11 +627,16 @@ class TerminalRenderer:
     def __init__(self):
         self.previous_lines = []
         self.enabled = sys.stdout.isatty()
+        self.input_enabled = sys.stdin.isatty()
         self.last_terminal_size = None
+        self.original_stdin_attrs = None
 
     def start(self):
         if not self.enabled:
             return
+        if self.input_enabled:
+            self.original_stdin_attrs = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin)
         # Alternate screen + hidden cursor keeps the shell scrollback stable and
         # avoids repainting over the user's prompt while the dashboard is live.
         sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J")
@@ -599,7 +671,37 @@ class TerminalRenderer:
 
         self.previous_lines = lines
 
+    def should_quit(self):
+        if not self.input_enabled:
+            return False
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if not ready:
+            return False
+        try:
+            key = os.read(sys.stdin.fileno(), 1).decode("utf-8", errors="ignore").lower()
+        except OSError:
+            return False
+        return key == "q"
+
+    def wait_for_next_frame(self, delay):
+        if not self.input_enabled:
+            time.sleep(delay)
+            return True
+        deadline = time.time() + delay
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return True
+            ready, _, _ = select.select([sys.stdin], [], [], remaining)
+            if not ready:
+                return True
+            if self.should_quit():
+                return False
+
     def stop(self):
+        if self.original_stdin_attrs is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.original_stdin_attrs)
+            self.original_stdin_attrs = None
         if not self.enabled:
             return
         sys.stdout.write("\033[?25h\033[?1049l")
@@ -962,9 +1064,10 @@ def choose_bar_width(width, compact, profile):
     if profile == "short":
         preferred = 14 if compact else 14
     elif profile == "long":
-        preferred = 20 if compact else (24 if width < 86 else 32)
+        preferred = 20 if compact else 32
     else:
-        preferred = 16 if compact else (20 if width < 86 else 28)
+        preferred = 16 if compact else 28
+
     max_bar_width = max(4, width - 46)
     return max(4, min(preferred, max_bar_width))
 
@@ -972,20 +1075,23 @@ def choose_trend_width(width, mode):
     if mode == "off":
         return 0
     if mode == "short":
-        preferred = 14 if width < 86 else 18
+        preferred = 18
     elif mode == "long":
-        preferred = 28 if width < 86 else 38
+        preferred = 38
     else:
-        preferred = 20 if width < 86 else 28
-    return max(4, min(preferred, width - 22))
+        preferred = 28
+
+    max_trend_width = max(4, width - 38)
+    return max(4, min(preferred, max_trend_width))
 
 def render_top_panel(lines, width, metrics, refresh_interval):
     lines.append("╭" + "─" * (width - 0) + "╮")
-    title = colorize("SYSTEMPI v2.1 Dashboard", "bold_cyan")
-    subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: {refresh_interval:g}s"
-    title_padding = max(1, width - 4 - len(strip_ansi(title)) - len(subtitle))
+    title = colorize("SYSTEMPI v2.1.1 Dashboard", "bold_cyan")
+    subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: {refresh_interval:g}s | q = quit"
+    header_inner_width = width - 2
+    title_padding = max(1, header_inner_width - len(strip_ansi(title)) - len(subtitle))
     header = f"{title}{' ' * title_padding}{COLORS['dim']}{subtitle}{RESET}"
-    lines.append(panel_line(truncate_display(header, width - 4), width))
+    lines.append(panel_line(truncate_display(header, header_inner_width), width))
     lines.append(divider(width))
 
 def key_value_line(label, value, width, label_width=14):
@@ -1001,6 +1107,10 @@ def compact_dual_metric_row(left_label, left_value, right_label, right_value, wi
 def doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=0.6):
     # Balanced two-column row for doctor mode: clean spacing first, then safe truncation.
     inner_width = max(24, width - 4)
+
+    if not right_label and not right_value:
+        left_content = f"{left_label:<9} {left_value}"
+        return panel_line(truncate_display(left_content, width - 4), width)
     separator = f" {colorize('│', 'dim')} "
     sep_width = len(strip_ansi(separator))
     gutter = 2
@@ -1329,15 +1439,14 @@ def render_dashboard(metrics, state, view, refresh_interval):
     elif effective_view["show_power_details"] == "warning_only" and has_power_warning(metrics["throttle"], state.throttle_occurred_latch):
         render_power_rows(lines, metrics, state, width)
 
-    trend_width = choose_trend_width(width, effective_view.get("health_trend_width", "normal"))
-    if trend_width > 0:
+    if effective_view.get("health_trend_width", "normal") != "off":
         trend = sparkline(
             list(state.history["health"]),
-            width=trend_width,
+            width=bar_width,
             fixed_min=0,
             fixed_max=100,
         )
-        lines.append(key_value_line("Health Trend", trend, width, label_width=34))
+        lines.append(metric_row("Health Trend", "", bar=trend, width=width))
     if metrics["temperature"] is not None and view.get("mode") in ("balanced", "doctor"):
         temp_trend = sparkline(list(state.history["temp"]), width=max(8, min(16, width - 24)))
         lines.append(key_value_line("Temp Trend", temp_trend, width))
@@ -1375,14 +1484,22 @@ def render_dashboard(metrics, state, view, refresh_interval):
             width=width,
         ))
     if view.get("mode") == "doctor":
+        refresh_package_update_status(state)
+        metrics["updates_status"] = state.updates_status
+        metrics["update_count"] = state.update_count
         lines.append(divider(width))
         lines.append(section_title("DOCTOR INSIGHT", width))
+        active_alerts = metrics.get("active_alerts", [])
+        alert_text = ", ".join(active_alerts[:3]) if active_alerts else "none"
+
         doctor_pairs = [
             ("Cooling", metrics["cooling_status"], "Power", metrics["power_stability"]),
             ("Workload", metrics["workload_profile"], "Storage", metrics["storage_insight"]),
             ("System", f"{metrics['pi_model']} [{metrics['thermal_profile_name']}]", "Arch", metrics["architecture"]),
-            ("Total RAM", f"{metrics['total_ram_gb']:.1f} GiB", "Alerts", f"{len(metrics.get('active_alerts', []))}"),
-        ]
+            ("RAM", f"{metrics['total_ram_gb']:.1f} GiB", "Updates", metrics["updates_status"]),
+            ("Top CPU", metrics["top_cpu_process"], "Alerts", alert_text),
+            ("Top RAM", metrics["top_mem_process"], "", ""),
+        ]   
         left_lengths = [len(f"{label:<9} {value}") for label, value, _, _ in doctor_pairs]
         right_lengths = [len(f"{label:<9} {value}") for _, _, label, value in doctor_pairs]
         max_left = max(left_lengths) if left_lengths else 20
@@ -1391,12 +1508,7 @@ def render_dashboard(metrics, state, view, refresh_interval):
         dynamic_ratio = (max_left / total) if total else 0.6
         dynamic_ratio = max(0.45, min(0.72, dynamic_ratio))
         for left_label, left_value, right_label, right_value in doctor_pairs:
-            lines.append(doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=dynamic_ratio))
-        lines.append(metric_row("Top CPU Proc", metrics["top_cpu_process"], width=width))
-        lines.append(metric_row("Top RAM Proc", metrics["top_mem_process"], width=width))
-        active_alerts = metrics.get("active_alerts", [])
-        alert_text = ", ".join(active_alerts[:3]) if active_alerts else "none"
-        lines.append(metric_row("Active Alerts", alert_text, width=width))
+            lines.append(doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=dynamic_ratio))    
     lines.append("╰" + "─" * (width - 0) + "╯")
 
     return "\n".join(lines)
@@ -1515,6 +1627,8 @@ def collect_metrics(state, boot_time):
         "total_ram_gb": psutil.virtual_memory().total / (1024**3),
         "top_cpu_process": top_cpu_process,
         "top_mem_process": top_mem_process,
+        "updates_status": state.updates_status,
+        "update_count": state.update_count,
     }
 
     hailo = state.hailo_monitor.get_stats()
@@ -1646,7 +1760,8 @@ def main():
             if args.once:
                 break
 
-            time.sleep(args.refresh)
+            if not renderer.wait_for_next_frame(args.refresh):
+                break
 
     finally:
         if not args.once:
