@@ -22,10 +22,12 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Persistent alert event logging with watch/history support
 - Lightweight active alert detection for CPU, RAM, disk, temperature, and Pi power/throttle events
 - Raspberry Pi hardware intelligence with model/arch/RAM/top-process insight rows
-- Optional Raspberry Pi AI Hat+ (Hailo) telemetry monitoring with NPU load, temperature, memory, and utilization metrics
+- Doctor mode package update availability monitoring with non-blocking background checks
+- Optional Raspberry Pi AI Hat+ / AI Hat+2 Hailo telemetry monitoring with NPU load, temperature, memory, and utilization metrics
 - 14 built-in themes including matrix, wasteland, ocean, raspberrypi, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
 - 4 dashboard variations: Balanced, Compact, Minimal, and Doctor
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
+- Keyboard shortcuts including `q` for instant dashboard exit
 - Adaptive dashboard scaling based on terminal width
 - Live per-core CPU visualization, disk I/O rates, network throughput, load average, and uptime
 
@@ -38,7 +40,7 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 | Balanced | Full monitoring dashboard |
 | Compact | Smaller terminal optimized |
 | Minimal | Essential-only clean mode |
-| Doctor | Diagnostic & alert-focused mode |
+| Doctor | Diagnostic, alert, and update-monitoring mode |
 
 Each variation is designed for a different monitoring workflow — from lightweight minimal monitoring to deep diagnostic analysis.
 
@@ -55,19 +57,19 @@ systempi --variation balanced --theme wasteland
 ##### Note: `--variant` and `--var` may also be used as aliases for `--variation`.
 
 <p align="center">
-<img width="707" height="587" alt="systempi-balanced-wasteland" src="https://github.com/user-attachments/assets/ecc2e8d9-084e-409f-9e92-f50b5717346a" />
+<img width="705" height="585" alt="SystempiBalancedWastelandV2 1 1" src="https://github.com/user-attachments/assets/377ad0b0-0830-4303-a428-4ea830490767" />
 </p>
 
 ---
 
-## Doctor Mode — Diagnostic & Alert Intelligence
+## Doctor Mode — Diagnostic, Alert & System Insight
 
 ```bash
 systempi --variation doctor --theme vaulttec
 ```
 
 <p align="center">
-<img width="707" height="790" alt="systempi-doctor-vaulttec" src="https://github.com/user-attachments/assets/2a310ce0-08ca-4104-b9eb-a1f7b238f1e5" />
+<img width="705" height="774" alt="SystempiDoctorVaulttecV2 1 1" src="https://github.com/user-attachments/assets/a376eb0a-5936-40e6-b2c5-994598d4ee32" />
 </p>
 
 ---
@@ -79,7 +81,7 @@ systempi --variation compact --theme crt
 ```
 
 <p align="center">
-<img width="626" height="330" alt="systempi-compact-crt" src="https://github.com/user-attachments/assets/15522d49-3ce9-44e9-9f87-0a925cb629b3" />
+<img width="609" height="330" alt="SystempiCompactCrtV2 1 1" src="https://github.com/user-attachments/assets/2c9c3984-6929-4a94-b965-4c5d206a4e0f" />
 </p>
 
 ---
@@ -91,7 +93,7 @@ systempi --variation minimal --theme ice
 ```
 
 <p align="center">
-<img width="611" height="245" alt="systempi-minimal-ice" src="https://github.com/user-attachments/assets/7b835ada-2917-46c3-bb1a-add97d040d4f" />
+<img width="585" height="245" alt="SystempiMinimalIceV2 1 1" src="https://github.com/user-attachments/assets/d0c2973e-778d-46ef-a273-555293b1b0e0" />
 </p>
 
 ---
@@ -103,7 +105,7 @@ systempi --theme raspberrypi
 ```
 
 <p align="center">
-<img width="705" height="585" alt="systempiBalancedRaspberryPi" src="https://github.com/user-attachments/assets/720fa70b-5af7-46a4-9116-519d3d510fb0" />
+<img width="657" height="585" alt="SystempiBalancedRaspberrypiV2 1 1" src="https://github.com/user-attachments/assets/1569d749-2846-4a41-9449-c7e1c73a68b8" />
 </p>
 
 ---
@@ -115,7 +117,7 @@ systempi --variation doctor --theme biohazard
 ```
 
 <p align="center">
-<img width="707" height="792" alt="systempi-doctor-biohazard" src="https://github.com/user-attachments/assets/c25075e2-5d8c-4a21-9199-de59fa2f8526" />
+<img width="705" height="773" alt="SystempiDoctorBiohazardV2 1 1" src="https://github.com/user-attachments/assets/edb28211-f095-4983-88af-81f6ef0935a8" />
 </p>
 
 ---
@@ -127,7 +129,7 @@ systempi --theme ocean
 ```
 
 <p align="center">
-<img width="707" height="586" alt="systempi-balanced-ocean" src="https://github.com/user-attachments/assets/2620435d-092b-4e43-8988-c7ca2e42dfe4" />
+<img width="705" height="585" alt="SystempiBalancedOceanV2 1 1" src="https://github.com/user-attachments/assets/1a1eea57-1a30-4db9-8295-0c6876be63a7" />
 </p>
 
 ---
@@ -139,7 +141,7 @@ systempi --theme synthwave
 ```
 
 <p align="center">
-<img width="707" height="586" alt="systempi-balanced-synthwave" src="https://github.com/user-attachments/assets/b8e25d24-1b99-43af-b4c8-74a3cc3a5173" />
+<img width="705" height="585" alt="SystempiBalancedSynthwaveV2 1 1" src="https://github.com/user-attachments/assets/ff95bc51-6c9b-491a-998a-06bfcbfc8061" />
 </p>
 
 ---
@@ -185,6 +187,8 @@ Default launch:
 ```bash
 systempi
 ```
+
+Press `q` at any time to exit the live dashboard.
 
 One-shot snapshot mode (render once and exit):
 
@@ -310,7 +314,7 @@ Notes:
 
 - Raspberry Pi hardware metrics require `vcgencmd`.
 - General system metrics require `psutil`, which is installed by `install.sh`.
-- Raspberry Pi AI Hat+2 telemetry is automatically detected when the Hailo software stack is installed.
+- Raspberry Pi AI Hat+ / AI Hat+2 telemetry is automatically detected when the Hailo software stack and `hailortcli` are available.
 - Non-Raspberry Pi systems can still provide standard CPU, memory, disk, and network metrics, but Pi-specific temperature, frequency, and throttling telemetry may show as unavailable.
 ---
 
