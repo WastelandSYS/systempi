@@ -2,7 +2,7 @@
 <!--                        HERO IMAGE                         -->
 <!-- ========================================================= -->
 
-<img width="1536" height="1024" alt="SystemPI Tool Banner" src="https://github.com/user-attachments/assets/02229b07-af74-4bc4-9f3d-37cb8799fb77" />
+<img width="1536" height="1024" alt="SystempiMainBnr" src="https://github.com/user-attachments/assets/780a4c7d-c3a8-4df4-ae9c-e383d9753907" />
 
 # systempi
 
