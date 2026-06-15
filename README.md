@@ -81,7 +81,7 @@ systempi --variation compact --theme crt
 ```
 
 <p align="center">
-<img width="609" height="330" alt="SystempiCompactCrtV2 1 1" src="https://github.com/user-attachments/assets/2c9c3984-6929-4a94-b965-4c5d206a4e0f" />
+<img width="601" height="313" alt="SystempiCompactCRT" src="https://github.com/user-attachments/assets/16c3474e-9c15-4271-8f9d-fb4c6695d76b" />
 </p>
 
 ---
@@ -93,7 +93,7 @@ systempi --variation minimal --theme ice
 ```
 
 <p align="center">
-<img width="585" height="245" alt="SystempiMinimalIceV2 1 1" src="https://github.com/user-attachments/assets/d0c2973e-778d-46ef-a273-555293b1b0e0" />
+<img width="593" height="247" alt="SystempiMinimalICE" src="https://github.com/user-attachments/assets/1d702f18-45b1-4961-a066-4dff613b1c00" />
 </p>
 
 ---
