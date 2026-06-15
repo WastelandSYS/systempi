@@ -917,13 +917,13 @@ def panel_line(content, width):
 def divider(width):
     return "├" + "─" * (width - 0) + "┤"
 
-def metric_row(label, value, unit="", bar=None, badge=None, color=None, width=72):
+def metric_row(label, value, unit="", bar=None, badge=None, color=None, width=72, bar_gap=3):
     label_text = f"{label:<14}"
     value_text = f"{value:>10}"
     if color:
         value_text = colorize(value_text, color)
     unit_text = f" {unit:<6}" if unit else "       "
-    bar_text = f"{' ' * 3}{bar}" if bar else ""
+    bar_text = f"{' ' * bar_gap}{bar}" if bar else ""
     badge_text = ""
     if badge:
         badge_label, badge_color = badge
@@ -1062,13 +1062,13 @@ def render_power_rows(lines, metrics, state, width):
 
 def choose_bar_width(width, compact, profile):
     if profile == "short":
-        preferred = 14 if compact else 14
+        preferred = 19 if compact else 19
     elif profile == "long":
         preferred = 20 if compact else 32
     else:
         preferred = 16 if compact else 28
 
-    max_bar_width = max(4, width - 46)
+    max_bar_width = max(4, width - (47 if profile == "short" else 46))
     return max(4, min(preferred, max_bar_width))
 
 def choose_trend_width(width, mode):
@@ -1200,24 +1200,24 @@ def prepare_event_log(state):
         pass
 
 def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_view):
-    minimal_bar = max(6, min(bar_width, 14))
+    minimal_bar = max(6, min(bar_width, 19))
     lines.append(section_title("MINIMAL ESSENTIALS", width))
 
     cpu_badge = status_badge(metrics["cpu_load"], CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM)
     mem_badge = status_badge(metrics["mem_percent"], 70, 90)
 
-    lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], minimal_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), badge=cpu_badge, color=cpu_badge[1], width=width))
+    lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], minimal_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), badge=cpu_badge, color=cpu_badge[1], width=width, bar_gap=6))
 
     if metrics["temperature"] is None:
         lines.append(metric_row("CPU Temp", "N/A", width=width))
     else:
         temp_badge = status_badge(metrics["temperature"], metrics["temp_warning"], metrics["temp_critical"])
-        lines.append(metric_row("CPU Temp", f"{metrics['temperature']:.1f}", "°C", bar=" " * minimal_bar, badge=temp_badge, color=temp_badge[1], width=width))
+        lines.append(metric_row("CPU Temp", f"{metrics['temperature']:.1f}", "°C", bar=" " * minimal_bar, badge=temp_badge, color=temp_badge[1], width=width, bar_gap=6))
 
     disk_badge = status_badge(metrics["disk_usage"], 80, 95)
 
-    lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], minimal_bar, 70, 90), badge=mem_badge, color=mem_badge[1], width=width))
-    lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], minimal_bar, 80, 95), badge=disk_badge, color=disk_badge[1], width=width))
+    lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], minimal_bar, 70, 90), badge=mem_badge, color=mem_badge[1], width=width, bar_gap=6))
+    lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], minimal_bar, 80, 95), badge=disk_badge, color=disk_badge[1], width=width, bar_gap=6))
     lines.append(metric_row("Net Total", f"{metrics['network_sent_per_sec'] + metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
 
     lines.append(divider(width))
@@ -1227,7 +1227,7 @@ def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_
         render_power_rows(lines, metrics, state, width)
 
     health_badge = status_badge(metrics["system_health"], 80, 50, inverse=True)
-    lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], bar_width, 80, 50, inverse=True), badge=health_badge, color=health_badge[1], width=width))
+    lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], bar_width, 80, 50, inverse=True), badge=health_badge, color=health_badge[1], width=width, bar_gap=6))
     lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], effective_view.get("health_why_limit", 2)), width))
     lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Minimal monitoring", "dim"), width))
 
@@ -1249,11 +1249,11 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
     lines.append(compact_dual_metric_row(colorize("NET", "bold_cyan"), colorize(f"{net_total:.0f}k", "white"), colorize("HEALTH", "bold_cyan"), colorize(health_pct, health_color), width))
     lines.append(divider(width))
 
-    compact_bar = max(6, min(bar_width, 14))
+    compact_bar = max(6, min(bar_width, 19))
     lines.append(section_title("COMPACT SYSTEM", width))
-    lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], compact_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), color=cpu_color, width=width))
-    lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], compact_bar, 70, 90), color=mem_color, width=width))
-    lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], compact_bar, 80, 95), color=disk_color, width=width))
+    lines.append(metric_row("CPU Load", f"{metrics['cpu_load']:.1f}", "%", bar=percent_bar(metrics["cpu_load"], compact_bar, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM), color=cpu_color, width=width, bar_gap=6))
+    lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], compact_bar, 70, 90), color=mem_color, width=width, bar_gap=6))
+    lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], compact_bar, 80, 95), color=disk_color, width=width, bar_gap=6))
     lines.append(metric_row("Net Total", f"{net_total:.2f}", "KiB/s", color="white", width=width))
     lines.append(divider(width))
     lines.append(section_title("COMPACT HEALTH", width))
@@ -1264,7 +1264,7 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
         fixed_max=100,
     )
     lines.append(key_value_line("Trend", trend, width, label_width=18))
-    lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], compact_bar, 80, 50, inverse=True), color=health_color, width=width))
+    lines.append(metric_row("System Health", f"{metrics['system_health']}", "%", bar=percent_bar(metrics["system_health"], compact_bar, 80, 50, inverse=True), color=health_color, width=width, bar_gap=6))
     lines.append(render_health_why_line(health_why_with_limit(metrics["health_why"], 2), width))
     lines.append(key_value_line(colorize("Profile ", "dim"), colorize("Compact monitoring", "dim"), width))
 
