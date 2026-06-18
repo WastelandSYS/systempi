@@ -225,7 +225,9 @@ class SystemState:
         self.prev_recv = 0
         self.prev_disk_read = 0
         self.prev_disk_write = 0
-        self.health_history = []
+        self.health_history = deque(maxlen=60)
+        self.health_total = 0.0
+        self.health_sample_count = 0
         self.network_interface = interface
         self.interface_locked = interface is not None
         self.last_net_time = time.time()
@@ -282,6 +284,9 @@ def run_package_update_check(state):
             timeout=15,
             check=False,
         )
+
+        if result.returncode != 0:
+            raise RuntimeError("apt update check failed")
 
         upgradable = [
             line for line in result.stdout.splitlines()
@@ -474,10 +479,13 @@ def get_network_usage(state):
         else:
             # Select interface once (avoid lo)
             if state.network_interface is None:
-                for iface, stats in net.items():
-                    if iface != "lo" and (stats.bytes_sent > 0 or stats.bytes_recv > 0):
-                        state.network_interface = iface
-                        break
+                candidates = [
+                    (iface, stats.bytes_sent + stats.bytes_recv)
+                    for iface, stats in net.items()
+                    if iface != "lo" and (stats.bytes_sent > 0 or stats.bytes_recv > 0)
+                ]
+                if candidates:
+                    state.network_interface = max(candidates, key=lambda x: x[1])[0]
 
             if not state.network_interface or state.network_interface not in net:
                 candidates = [(iface, s.bytes_sent + s.bytes_recv) for iface, s in net.items() if iface != "lo"]
@@ -491,6 +499,7 @@ def get_network_usage(state):
         if state.prev_sent == 0 and state.prev_recv == 0:
             state.prev_sent = stats.bytes_sent
             state.prev_recv = stats.bytes_recv
+            state.last_net_time = time.time()
             return 0.0, 0.0
 
         current_time = time.time()
@@ -524,6 +533,7 @@ def get_disk_io(state):
         if state.prev_disk_read == 0 and state.prev_disk_write == 0:
             state.prev_disk_read = stats.read_bytes
             state.prev_disk_write = stats.write_bytes
+            state.last_disk_time = time.time()
             return 0.0, 0.0
 
         current_time = time.time()
@@ -1548,11 +1558,10 @@ def collect_metrics(state, boot_time):
     )
 
     state.health_history.append(system_health)
+    state.health_total += system_health
+    state.health_sample_count += 1
 
-    system_stability = (
-        sum(state.health_history) / len(state.health_history)
-        if state.health_history else 100
-    )
+    system_stability = state.health_total / state.health_sample_count
     storage_health = calculate_storage_health(
         disk_usage,
         disk_write_per_sec
@@ -1706,13 +1715,10 @@ def main():
         apply_theme(args.theme)
 
     view = resolve_view_config(args)
-    boot_time = psutil.boot_time()
-    state = SystemState(interface=args.interface)
-    if args.watch:
-        prepare_event_log(state)
     if args.history:
-        if state.event_log_path.exists():
-            lines = state.event_log_path.read_text(encoding="utf-8").splitlines()[-40:]
+        event_log_path = default_log_path()
+        if event_log_path.exists():
+            lines = event_log_path.read_text(encoding="utf-8").splitlines()[-40:]
             print("\n".join(lines) if lines else "No event history yet.")
         else:
             print("No event history yet.")
@@ -1727,6 +1733,11 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(2)
+
+    boot_time = psutil.boot_time()
+    state = SystemState(interface=args.interface)
+    if args.watch:
+        prepare_event_log(state)
 
     renderer = TerminalRenderer()
 
