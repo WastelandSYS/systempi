@@ -278,7 +278,21 @@ Help menu:
 systempi -h
 ```
 
----
+Version information:
+
+```bash
+systempi --version
+```
+
+Terminal glyph selection:
+
+```bash
+systempi --glyphs auto
+systempi --glyphs unicode
+systempi --glyphs ascii
+```
+
+`auto` automatically selects the most compatible glyph set for the active terminal. `unicode` forces full Unicode rendering, while `ascii` uses a plain ASCII fallback for maximum compatibility.
 
 # AVAILABLE THEMES
 
@@ -306,9 +320,10 @@ Designed primarily for Linux systems.
 Tested on:
 
 - Raspberry Pi OS
-- Kali Linux ARM
-- Raspberry Pi 4B
 - Raspberry Pi 5
+- Raspberry Pi 4B
+- Raspberry Pi Zero 2w
+- Kali Linux ARM
 
 Notes:
 
