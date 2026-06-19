@@ -10,6 +10,7 @@
 
 import argparse
 import json
+import math
 import os
 import platform
 import pty
@@ -29,6 +30,7 @@ from pathlib import Path
 import psutil
 
 # Constants
+SYSTEMPI_VERSION = "2.1.2"
 # Fallback thermal thresholds used when no model-specific profile is available.
 TEMP_WARNING = 60
 TEMP_CRITICAL = 75
@@ -48,6 +50,31 @@ CPU_THRESHOLD_LOW = 60
 CPU_THRESHOLD_MEDIUM = 85
 RESET = "\033[0m"
 UPDATE_CHECK_INTERVAL = 1800
+PROCESS_CHECK_INTERVAL = 5
+
+UNICODE_GLYPHS = {
+    "top_left": "╭", "top_right": "╮", "bottom_left": "╰", "bottom_right": "╯",
+    "tee_left": "├", "tee_right": "┤", "vertical": "│", "horizontal": "─",
+    "bar_filled": "█", "bar_empty": "░", "sparkline": "▁▂▃▄▅▆▇█",
+    "bullet": " • ", "ellipsis": "…", "temperature_unit": "°C",
+}
+# The kernel Linux console commonly supports the traditional square box set and
+# full/shaded bars, but not the eighth-height Unicode blocks used by sparklines.
+# Keep this separate from the fully ASCII set so local-console users retain a
+# proper dashboard frame without affecting terminal emulators or SSH sessions.
+LINUX_CONSOLE_GLYPHS = {
+    "top_left": "┌", "top_right": "┐", "bottom_left": "└", "bottom_right": "┘",
+    "tee_left": "├", "tee_right": "┤", "vertical": "│", "horizontal": "─",
+    "bar_filled": "█", "bar_empty": "░", "sparkline": "░░▒▒▓▓██",
+    "bullet": " • ", "ellipsis": "…", "temperature_unit": "°C",
+}
+ASCII_GLYPHS = {
+    "top_left": "+", "top_right": "+", "bottom_left": "+", "bottom_right": "+",
+    "tee_left": "+", "tee_right": "+", "vertical": "|", "horizontal": "-",
+    "bar_filled": "#", "bar_empty": ".", "sparkline": "._:-=+*@",
+    "bullet": " - ", "ellipsis": ">", "temperature_unit": "C",
+}
+GLYPHS = UNICODE_GLYPHS.copy()
 
 THEMES = {
     "default": {
@@ -219,8 +246,24 @@ def disable_colors():
     COLORS = {key: "" for key in THEMES["default"].keys()}
     RESET = ""
 
+
+def configure_glyphs(mode="auto"):
+    """Select glyphs that the active terminal can render reliably."""
+    global GLYPHS
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    utf8_output = "utf" in encoding
+    model = detect_pi_model().lower() if mode == "auto" else ""
+    local_pi_zero = "pi zero" in model and not os.environ.get("SSH_CONNECTION")
+    if mode == "ascii" or (mode == "auto" and not utf8_output):
+        selected = ASCII_GLYPHS
+    elif mode == "auto" and local_pi_zero:
+        selected = LINUX_CONSOLE_GLYPHS
+    else:
+        selected = UNICODE_GLYPHS
+    GLYPHS = selected.copy()
+
 class SystemState:
-    def __init__(self, interface=None):
+    def __init__(self, interface=None, refresh_interval=1.0):
         self.prev_sent = 0
         self.prev_recv = 0
         self.prev_disk_read = 0
@@ -244,11 +287,16 @@ class SystemState:
         self.session_alert_counts = {}
         self.event_log_path = default_log_path()
         self.last_top_cpu_process = "N/A"
+        self.last_top_mem_process = "N/A"
+        self.last_process_check = 0
+        self.pi_model = detect_pi_model()
         self.update_count = None
         self.updates_status = "Checking..."
         self.last_update_check = 0
         self.update_check_running = False
         self.update_lock = threading.Lock()
+        self.pi_monitor = PiMonitor(refresh_interval)
+        self.pi_monitor.start()
         self.hailo_monitor = HailoMonitor()
         self.hailo_monitor.start()
 
@@ -256,15 +304,41 @@ def default_log_path():
     home = Path.home()
     return home / ".local" / "state" / "systempi" / "events.log"
 
-def run_vcgencmd(args):
+def run_vcgencmd(args, stop_event=None):
+    proc = None
     try:
-        return subprocess.check_output(
+        proc = subprocess.Popen(
             ["vcgencmd"] + args,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            timeout=2,
-        ).strip()
+        )
+        deadline = time.monotonic() + 2
+        while proc.poll() is None:
+            if stop_event is not None and stop_event.wait(0.05):
+                proc.terminate()
+                try:
+                    proc.wait(timeout=0.2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                return None
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.wait()
+                return None
+            if stop_event is None:
+                time.sleep(0.05)
+
+        stdout, _ = proc.communicate()
+        return stdout.strip()
     except Exception:
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+                proc.wait()
+            except Exception:
+                pass
         return None
 
 def run_package_update_check(state):
@@ -433,24 +507,32 @@ class HailoMonitor:
             self._thread.join(timeout=3)
 
 
-def get_pi_stats():
+def get_pi_stats(stop_event=None):
+    temp_out = run_vcgencmd(["measure_temp"], stop_event)
+    if stop_event is not None and stop_event.is_set():
+        return None, None, None
+    freq_out = run_vcgencmd(["measure_clock", "arm"], stop_event)
+    if stop_event is not None and stop_event.is_set():
+        return None, None, None
+    throttle_out = run_vcgencmd(["get_throttled"], stop_event)
+
+    temperature = None
+    frequency = None
+    throttle = None
+
     try:
-        temp_out = run_vcgencmd(["measure_temp"])
-        freq_out = run_vcgencmd(["measure_clock", "arm"])
-        throttle_out = run_vcgencmd(["get_throttled"])
-
-        if not temp_out or not freq_out or not throttle_out:
-            raise ValueError("vcgencmd returned None")
-
-        # Temperature
         temperature = float(temp_out.split('=')[1].replace("'C", "").strip())
+    except (AttributeError, IndexError, TypeError, ValueError):
+        pass
 
-        # Frequency
+    try:
         frequency = int(freq_out.split("=")[1])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        pass
 
-        # Throttle parsing (safe fallback)
+    try:
         parts = throttle_out.split("=")
-        value = int(parts[1], 16) if len(parts) > 1 else 0
+        value = int(parts[1], 16)
 
         throttle = {
             "undervoltage": bool(value & 0x1),
@@ -462,15 +544,70 @@ def get_pi_stats():
             "throttling_occurred": bool(value & 0x40000),
             "soft_temp_limit_occurred": bool(value & 0x80000),
         }
+    except (AttributeError, IndexError, TypeError, ValueError):
+        pass
 
-        return temperature, frequency, throttle
+    return temperature, frequency, throttle
 
-    except Exception:
-        return None, None, None
+
+class PiMonitor:
+    """Collect Raspberry Pi firmware telemetry without blocking dashboard input."""
+
+    def __init__(self, refresh_interval=1.0):
+        self._stats = (None, None, None)
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._ready = threading.Event()
+        self._thread = None
+        self.poll_interval = max(1.0, refresh_interval)
+        self.available = shutil.which("vcgencmd") is not None
+
+    def start(self):
+        if not self.available:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            temperature, frequency, throttle = get_pi_stats(self._stop)
+            if self._stop.is_set():
+                break
+
+            with self._lock:
+                previous_temp, previous_freq, previous_throttle = self._stats
+                self._stats = (
+                    temperature if temperature is not None else previous_temp,
+                    frequency if frequency is not None else previous_freq,
+                    throttle if throttle is not None else previous_throttle,
+                )
+            self._ready.set()
+
+            if self._stop.wait(self.poll_interval):
+                break
+
+    def get_stats(self):
+        with self._lock:
+            temperature, frequency, throttle = self._stats
+            return (
+                temperature,
+                frequency,
+                dict(throttle) if throttle is not None else None,
+            )
+
+    def wait_ready(self, timeout=1.0):
+        if self.available:
+            self._ready.wait(timeout)
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=1)
 
 def get_network_usage(state):
     try:
         net = psutil.net_io_counters(pernic=True)
+        previous_interface = state.network_interface
 
         if state.interface_locked:
             if state.network_interface not in net:
@@ -495,6 +632,12 @@ def get_network_usage(state):
                 state.network_interface = max(candidates, key=lambda x: x[1])[0]
 
             stats = net[state.network_interface]
+
+        if state.network_interface != previous_interface:
+            state.prev_sent = stats.bytes_sent
+            state.prev_recv = stats.bytes_recv
+            state.last_net_time = time.time()
+            return 0.0, 0.0
 
         if state.prev_sent == 0 and state.prev_recv == 0:
             state.prev_sent = stats.bytes_sent
@@ -597,12 +740,12 @@ def status_badge(value, warning, critical, inverse=False):
 def percent_bar(value, width=18, warning=60, critical=85, inverse=False):
     value = max(0, min(100, value))
     filled = int(round((value / 100) * width))
-    bar = "█" * filled + "░" * (width - filled)
+    bar = GLYPHS["bar_filled"] * filled + GLYPHS["bar_empty"] * (width - filled)
     color = severity_color(value, warning, critical, inverse=inverse)
     return colorize(bar, color)
 
 def colored_core(value):
-    blocks = "▁▂▃▄▅▆▇█"
+    blocks = GLYPHS["sparkline"]
     color = severity_color(value, CPU_THRESHOLD_LOW, CPU_THRESHOLD_MEDIUM)
     index = int((max(0, min(100, value)) / 100) * (len(blocks) - 1))
     return colorize(blocks[index], color)
@@ -612,7 +755,7 @@ def sparkline(values, width=24, fixed_min=None, fixed_max=None):
         return ""
 
     samples = values[-width:]
-    blocks = "▁▂▃▄▅▆▇█"
+    blocks = GLYPHS["sparkline"]
 
     if fixed_min is not None and fixed_max is not None:
         low = fixed_min
@@ -803,7 +946,7 @@ def render_health_why_line(health_why_reasons, width):
 
     if health_why_reasons:
         colored_reasons = [color_reason(reason) for reason in health_why_reasons]
-        bullets = colorize(" • ", "dim").join(colored_reasons)
+        bullets = colorize(GLYPHS["bullet"], "dim").join(colored_reasons)
 
         label = colorize(f"{'Health Why:':<14}", "bold_cyan")
         text = f"{label}{bullets}"
@@ -913,7 +1056,7 @@ def truncate_display(text, max_width):
         return text
     if max_width <= 1:
         return ""
-    return strip_ansi(text)[:max_width - 1] + "…"
+    return strip_ansi(text)[:max_width - 1] + GLYPHS["ellipsis"]
 
 def strip_ansi(text):
     # This renderer only truncates simple fields; stripping all escape sequences keeps fallback safe.
@@ -922,10 +1065,10 @@ def strip_ansi(text):
 def panel_line(content, width):
     plain_width = len(strip_ansi(content))
     padding = max(0, width - 2 - plain_width)
-    return f"│ {content}{' ' * padding} │"
+    return f"{GLYPHS['vertical']} {content}{' ' * padding} {GLYPHS['vertical']}"
 
 def divider(width):
-    return "├" + "─" * (width - 0) + "┤"
+    return GLYPHS["tee_left"] + GLYPHS["horizontal"] * width + GLYPHS["tee_right"]
 
 def metric_row(label, value, unit="", bar=None, badge=None, color=None, width=72, bar_gap=3):
     label_text = f"{label:<14}"
@@ -985,10 +1128,10 @@ VARIATIONS = {
         "show_cores": False,
         "show_io_details": False,
         "show_net_details": False,
-        "show_uptime": False,
+        "show_uptime": True,
         "show_load_average": False,
         "show_swap": True,
-        "show_power_details": True,
+        "show_power_details": "warning_only",
         "show_storage_health": True,
         "show_stability_avg": True,
         "health_trend_width": "short",
@@ -1001,9 +1144,9 @@ VARIATIONS = {
         "show_cores": False,
         "show_io_details": False,
         "show_net_details": False,
-        "show_uptime": False,
+        "show_uptime": True,
         "show_load_average": False,
-        "show_swap": False,
+        "show_swap": True,
         "show_power_details": "warning_only",
         "show_storage_health": False,
         "show_stability_avg": False,
@@ -1095,8 +1238,8 @@ def choose_trend_width(width, mode):
     return max(4, min(preferred, max_trend_width))
 
 def render_top_panel(lines, width, metrics, refresh_interval):
-    lines.append("╭" + "─" * (width - 0) + "╮")
-    title = colorize("SYSTEMPI v2.1.1 Dashboard", "bold_cyan")
+    lines.append(GLYPHS["top_left"] + GLYPHS["horizontal"] * width + GLYPHS["top_right"])
+    title = colorize(f"SYSTEMPI v{SYSTEMPI_VERSION} Dashboard", "bold_cyan")
     subtitle = f"Interface: {metrics['network_interface'] or 'N/A'} | Refresh: {refresh_interval:g}s | q = quit"
     header_inner_width = width - 2
     title_padding = max(1, header_inner_width - len(strip_ansi(title)) - len(subtitle))
@@ -1109,19 +1252,96 @@ def key_value_line(label, value, width, label_width=14):
     return panel_line(truncate_display(content, width - 4), width)
 
 def compact_dual_metric_row(left_label, left_value, right_label, right_value, width):
-    left = f"{left_label:<6} {left_value:>6}"
-    right = f"{right_label:<6} {right_value:>7}"
-    content = f"{left}    {right}"
+    inner_width = max(20, width - 4)
+    preferred_width = 43
+    layout_width = min(inner_width, preferred_width)
+    gap = 4 if layout_width >= preferred_width else 2
+    if layout_width >= preferred_width:
+        left_width = 16
+        right_width = 23
+    else:
+        available = layout_width - gap
+        left_width = available // 2
+        right_width = available - left_width
+    leading_space = max(0, (inner_width - layout_width) // 2)
+
+    def format_column(label, value, column_width):
+        content = truncate_display(f"{label}  {value}", column_width)
+        padding = max(0, column_width - len(strip_ansi(content)))
+        return f"{content}{' ' * padding}"
+
+    left = format_column(left_label, left_value, left_width)
+    right = format_column(right_label, right_value, right_width)
+    content = f"{' ' * leading_space}{left}{' ' * gap}{right}"
     return panel_line(truncate_display(content, width - 4), width)
 
-def doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=0.6):
+
+def compact_three_metric_row(metrics, width):
+    inner_width = max(20, width - 4)
+    gap = 0
+    available = inner_width - 4
+    base_width = available // 3
+    column_widths = [base_width, base_width, inner_width - (base_width * 2)]
+    columns = []
+
+    for (label, value), column_width in zip(metrics, column_widths):
+        content = truncate_display(f"{label}   {value}", column_width)
+        padding = max(0, column_width - len(strip_ansi(content)))
+        columns.append(f"{content}{' ' * padding}")
+
+    return panel_line(f"{' ' * gap}".join(columns), width)
+
+
+def compact_net_load_uptime_row(
+    net_label,
+    net_value,
+    load_label,
+    load_value,
+    uptime_label,
+    uptime_value,
+    width,
+):
+    inner_width = max(20, width - 4)
+    gap = 0
+    available = inner_width - 4
+    first_width = available // 3
+    second_width = available // 3
+    third_width = inner_width - first_width - second_width
+
+    net_content = truncate_display(f"{net_label}   {net_value}", first_width)
+    net_padding = max(0, first_width - len(strip_ansi(net_content)))
+    load_content = truncate_display(
+        f"{load_label}   {load_value}",
+        second_width,
+    )
+    load_padding = max(0, second_width - len(strip_ansi(load_content)))
+    uptime_content = truncate_display(
+        f"{uptime_label}   {uptime_value}",
+        third_width,
+    )
+    uptime_padding = max(0, third_width - len(strip_ansi(uptime_content)))
+    content = (
+        f"{net_content}{' ' * net_padding}{' ' * gap}"
+        f"{load_content}{' ' * load_padding}{' ' * gap}"
+        f"{uptime_content}{' ' * uptime_padding}"
+    )
+    return panel_line(truncate_display(content, width - 4), width)
+
+
+def format_compact_uptime(uptime, width=None):
+    if width is not None and width < 58:
+        return "".join(str(uptime).split())
+    return str(uptime)
+
+
+def doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=0.5):
     # Balanced two-column row for doctor mode: clean spacing first, then safe truncation.
     inner_width = max(24, width - 4)
 
     if not right_label and not right_value:
         left_content = f"{left_label:<9} {left_value}"
         return panel_line(truncate_display(left_content, width - 4), width)
-    separator = f" {colorize('│', 'dim')} "
+    separator = f" {colorize(GLYPHS['vertical'], 'dim')} "
     sep_width = len(strip_ansi(separator))
     gutter = 2
     available = max(20, inner_width - sep_width - gutter)
@@ -1145,6 +1365,11 @@ def detect_pi_model():
     except Exception:
         pass
     return "Unknown"
+
+
+def format_pi_model_display(model):
+    display = re.sub(r"^Raspberry\s+", "", model or "Unknown", flags=re.IGNORECASE)
+    return re.sub(r"\s+Rev(?:ision)?\s+.*$", "", display, flags=re.IGNORECASE)
 
 
 
@@ -1222,13 +1447,15 @@ def render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_
         lines.append(metric_row("CPU Temp", "N/A", width=width))
     else:
         temp_badge = status_badge(metrics["temperature"], metrics["temp_warning"], metrics["temp_critical"])
-        lines.append(metric_row("CPU Temp", f"{metrics['temperature']:.1f}", "°C", bar=" " * minimal_bar, badge=temp_badge, color=temp_badge[1], width=width, bar_gap=6))
-
+        lines.append(metric_row("CPU Temp", f"{metrics['temperature']:.1f}", GLYPHS["temperature_unit"], bar=" " * minimal_bar, badge=temp_badge, color=temp_badge[1], width=width, bar_gap=6))
     disk_badge = status_badge(metrics["disk_usage"], 80, 95)
+    swap_badge = status_badge(metrics["swap_percent"], 40, 75)
 
     lines.append(metric_row("RAM Usage", f"{metrics['mem_percent']:.1f}", "%", bar=percent_bar(metrics["mem_percent"], minimal_bar, 70, 90), badge=mem_badge, color=mem_badge[1], width=width, bar_gap=6))
+    lines.append(metric_row("Swap Usage", f"{metrics['swap_percent']:.1f}", "%", bar=percent_bar(metrics["swap_percent"], minimal_bar, 40, 75), badge=swap_badge, color=swap_badge[1], width=width, bar_gap=6))
     lines.append(metric_row("Disk Usage", f"{metrics['disk_usage']:.1f}", "%", bar=percent_bar(metrics["disk_usage"], minimal_bar, 80, 95), badge=disk_badge, color=disk_badge[1], width=width, bar_gap=6))
     lines.append(metric_row("Net Total", f"{metrics['network_sent_per_sec'] + metrics['network_recv_per_sec']:.2f}", "KiB/s", color="white", width=width))
+    lines.append(key_value_line("Uptime", colorize(metrics["uptime"], "white"), width, label_width=20))
 
     lines.append(divider(width))
     lines.append(section_title("MINIMAL HEALTH", width))
@@ -1253,10 +1480,36 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
     ram_pct = f"{metrics['mem_percent']:.0f}%"
     disk_pct = f"{metrics['disk_usage']:.0f}%"
     health_pct = f"{metrics['system_health']}%"
+    swap_color = severity_color(metrics["swap_percent"], 40, 75)
+    swap_pct = f"{metrics['swap_percent']:.0f}%"
+    uptime_short = format_compact_uptime(metrics["uptime"], width)
+    uptime_label = "UP" if width < 58 else "UPTIME"
     lines.append(section_title("COMPACT SNAPSHOT", width))
-    lines.append(compact_dual_metric_row(colorize("CPU", "bold_cyan"), colorize(cpu_pct, cpu_color), colorize("TEMP", "bold_cyan"), colorize(temp_value, temp_color), width))
-    lines.append(compact_dual_metric_row(colorize("RAM", "bold_cyan"), colorize(ram_pct, mem_color), colorize("DISK", "bold_cyan"), colorize(disk_pct, disk_color), width))
-    lines.append(compact_dual_metric_row(colorize("NET", "bold_cyan"), colorize(f"{net_total:.0f}k", "white"), colorize("HEALTH", "bold_cyan"), colorize(health_pct, health_color), width))
+    if width >= 58:
+        lines.append(compact_three_metric_row([
+            (colorize("CPU", "bold_cyan"), colorize(cpu_pct, cpu_color)),
+            (colorize("TEMP", "bold_cyan"), colorize(temp_value, temp_color)),
+            (colorize("HEALTH", "bold_cyan"), colorize(health_pct, health_color)),
+        ], width))
+        lines.append(compact_three_metric_row([
+            (colorize("RAM", "bold_cyan"), colorize(ram_pct, mem_color)),
+            (colorize("SWAP", "bold_cyan"), colorize(swap_pct, swap_color)),
+            (colorize("DISK  ", "bold_cyan"), colorize(disk_pct, disk_color)),
+        ], width))
+        lines.append(compact_net_load_uptime_row(
+            colorize("NET", "bold_cyan"),
+            colorize(f"{net_total:.0f}k", "white"),
+            colorize("LOAD", "bold_cyan"),
+            colorize(f"{metrics['load_avg'][0]:.2f}", "white"),
+            colorize(uptime_label, "bold_cyan"),
+            colorize(uptime_short, "white"),
+            width,
+        ))
+    else:
+        lines.append(compact_dual_metric_row(colorize("CPU", "bold_cyan"), colorize(cpu_pct, cpu_color), colorize("TEMP", "bold_cyan"), colorize(temp_value, temp_color), width))
+        lines.append(compact_dual_metric_row(colorize("RAM", "bold_cyan"), colorize(ram_pct, mem_color), colorize("SWAP", "bold_cyan"), colorize(swap_pct, swap_color), width))
+        lines.append(compact_dual_metric_row(colorize("DISK", "bold_cyan"), colorize(disk_pct, disk_color), colorize("NET", "bold_cyan"), colorize(f"{net_total:.0f}k", "white"), width))
+        lines.append(compact_dual_metric_row(colorize("HEALTH", "bold_cyan"), colorize(health_pct, health_color), colorize(uptime_label, "bold_cyan"), colorize(uptime_short, "white"), width))
     lines.append(divider(width))
 
     compact_bar = max(6, min(bar_width, 19))
@@ -1267,8 +1520,10 @@ def render_compact_dashboard(lines, metrics, state, width, bar_width):
     lines.append(metric_row("Net Total", f"{net_total:.2f}", "KiB/s", color="white", width=width))
     lines.append(divider(width))
     lines.append(section_title("COMPACT HEALTH", width))
+    if has_power_warning(metrics["throttle"], state.throttle_occurred_latch):
+        render_power_rows(lines, metrics, state, width)
     trend = sparkline(
-        state.health_history,
+        list(state.health_history),
         width=max(8, min(12, width - 24)),
         fixed_min=0,
         fixed_max=100,
@@ -1301,11 +1556,11 @@ def render_dashboard(metrics, state, view, refresh_interval):
     render_top_panel(lines, width, metrics, refresh_interval)
     if view.get("mode") == "minimal":
         render_minimal_dashboard(lines, metrics, state, width, bar_width, effective_view)
-        lines.append("╰" + "─" * (width - 0) + "╯")
+        lines.append(GLYPHS["bottom_left"] + GLYPHS["horizontal"] * width + GLYPHS["bottom_right"])
         return "\n".join(lines)
     if view.get("mode") == "compact":
         render_compact_dashboard(lines, metrics, state, width, bar_width)
-        lines.append("╰" + "─" * (width - 0) + "╯")
+        lines.append(GLYPHS["bottom_left"] + GLYPHS["horizontal"] * width + GLYPHS["bottom_right"])
         return "\n".join(lines)
 
     lines.append(section_title("CPU / THERMAL", width))
@@ -1329,7 +1584,7 @@ def render_dashboard(metrics, state, view, refresh_interval):
         lines.append(metric_row(
             "CPU Temp",
             f"{metrics['temperature']:.1f}",
-            "°C",
+            GLYPHS["temperature_unit"],
             badge=temp_badge,
             color=temp_badge[1],
             width=width,
@@ -1420,7 +1675,7 @@ def render_dashboard(metrics, state, view, refresh_interval):
             lines.append(metric_row(
                 "NPU Temp",
                 f"{metrics['hailo_temp_c']:.1f}",
-                "°C",
+                GLYPHS["temperature_unit"],
                 badge=npu_temp_badge,
                 color=npu_temp_badge[1],
                 width=width,
@@ -1505,33 +1760,42 @@ def render_dashboard(metrics, state, view, refresh_interval):
         doctor_pairs = [
             ("Cooling", metrics["cooling_status"], "Power", metrics["power_stability"]),
             ("Workload", metrics["workload_profile"], "Storage", metrics["storage_insight"]),
-            ("System", f"{metrics['pi_model']} [{metrics['thermal_profile_name']}]", "Arch", metrics["architecture"]),
+            ("System", f"{format_pi_model_display(metrics['pi_model'])} [{metrics['thermal_profile_name']}]", "Arch", metrics["architecture"]),
             ("RAM", f"{metrics['total_ram_gb']:.1f} GiB", "Updates", metrics["updates_status"]),
             ("Top CPU", metrics["top_cpu_process"], "Alerts", alert_text),
             ("Top RAM", metrics["top_mem_process"], "", ""),
         ]   
-        left_lengths = [len(f"{label:<9} {value}") for label, value, _, _ in doctor_pairs]
-        right_lengths = [len(f"{label:<9} {value}") for _, _, label, value in doctor_pairs]
+        two_column_pairs = [pair for pair in doctor_pairs if pair[2] or pair[3]]
+        left_lengths = [len(f"{label:<9} {value}") for label, value, _, _ in two_column_pairs]
+        right_lengths = [len(f"{label:<9} {value}") for _, _, label, value in two_column_pairs]
         max_left = max(left_lengths) if left_lengths else 20
         max_right = max(right_lengths) if right_lengths else 20
-        total = max_left + max_right
-        dynamic_ratio = (max_left / total) if total else 0.6
-        dynamic_ratio = max(0.45, min(0.72, dynamic_ratio))
+        column_width = max(20, max(24, width - 4) - 5)
+        left_width = column_width // 2
+        right_width = column_width - left_width
+        if max_left > left_width and max_right < right_width:
+            left_width += min(max_left - left_width, right_width - max_right)
+        elif max_right > right_width and max_left < left_width:
+            left_width -= min(max_right - right_width, left_width - max_left)
+        dynamic_ratio = left_width / column_width
         for left_label, left_value, right_label, right_value in doctor_pairs:
             lines.append(doctor_dual_metric_row(left_label, left_value, right_label, right_value, width, left_ratio=dynamic_ratio))    
-    lines.append("╰" + "─" * (width - 0) + "╯")
+    lines.append(GLYPHS["bottom_left"] + GLYPHS["horizontal"] * width + GLYPHS["bottom_right"])
 
     return "\n".join(lines)
 
 def format_uptime(seconds):
-    hours = int(seconds // 3600)
+    days = int(seconds // 86400)
+    hours = int((seconds % 86400) // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m {secs}s"
     return f"{hours}h {minutes}m {secs}s"
 
 def collect_metrics(state, boot_time):
-    temperature, frequency, throttle = get_pi_stats()
-    pi_model = detect_pi_model()
+    temperature, frequency, throttle = state.pi_monitor.get_stats()
+    pi_model = state.pi_model
     thermal_profile_name, thermal_profile = thermal_profile_for_model(pi_model)
     mem_percent = psutil.virtual_memory().percent
     core_loads = psutil.cpu_percent(interval=None, percpu=True)
@@ -1588,25 +1852,29 @@ def collect_metrics(state, boot_time):
         state.history["temp"].append(temperature)
 
     top_cpu_process = state.last_top_cpu_process
-    top_mem_process = "N/A"
-    try:
-        mem_procs = []
-        cpu_procs = []
-        for proc in psutil.process_iter(["name", "memory_percent", "cpu_percent"]):
-            name = proc.info.get("name") or "unknown"
-            mem_procs.append((name, proc.info.get("memory_percent") or 0.0))
-            cpu = proc.info.get("cpu_percent")
-            if cpu and cpu > 0:
-                cpu_procs.append((name, cpu))
-        if mem_procs:
-            top_mem = max(mem_procs, key=lambda x: x[1])
-            top_mem_process = f"{top_mem[0]} {top_mem[1]:.1f}%"
-        if cpu_procs:
-            top_cpu = max(cpu_procs, key=lambda x: x[1])
-            top_cpu_process = f"{top_cpu[0]} {top_cpu[1]:.1f}%"
-    except Exception:
-        pass
-    state.last_top_cpu_process = top_cpu_process
+    top_mem_process = state.last_top_mem_process
+    now = time.time()
+    if now - state.last_process_check >= PROCESS_CHECK_INTERVAL:
+        try:
+            mem_procs = []
+            cpu_procs = []
+            for proc in psutil.process_iter(["name", "memory_percent", "cpu_percent"]):
+                name = proc.info.get("name") or "unknown"
+                mem_procs.append((name, proc.info.get("memory_percent") or 0.0))
+                cpu = proc.info.get("cpu_percent")
+                if cpu and cpu > 0:
+                    cpu_procs.append((name, cpu))
+            if mem_procs:
+                top_mem = max(mem_procs, key=lambda x: x[1])
+                top_mem_process = f"{top_mem[0]} {top_mem[1]:.1f}%"
+            if cpu_procs:
+                top_cpu = max(cpu_procs, key=lambda x: x[1])
+                top_cpu_process = f"{top_cpu[0]} {top_cpu[1]:.1f}%"
+        except Exception:
+            pass
+        state.last_top_cpu_process = top_cpu_process
+        state.last_top_mem_process = top_mem_process
+        state.last_process_check = now
 
     metrics = {
         "temperature": temperature,
@@ -1640,7 +1908,7 @@ def collect_metrics(state, boot_time):
         "update_count": state.update_count,
     }
 
-    hailo = state.hailo_monitor.get_stats()
+    hailo = hailo_snap
     metrics["hailo_available"]    = hailo is not None
     metrics["hailo_nnc_util"]     = hailo["nnc_util"]     if hailo else None
     metrics["hailo_cpu_util"]     = hailo["cpu_util"]     if hailo else None
@@ -1675,11 +1943,23 @@ def export_snapshot(metrics, export_format, output_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="systempi realtime dashboard")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"systempi {SYSTEMPI_VERSION}",
+        help="show the installed SystemPi version and exit",
+    )
     parser.add_argument("--compact", action="store_true", help="smaller layout for narrow terminals")
     parser.add_argument("--theme", choices=sorted(THEMES.keys()), default="default", help="color theme")
     parser.add_argument("--refresh", type=float, default=1.0, help="refresh interval in seconds (example: 0.5)")
     parser.add_argument("--interface", help="network interface to monitor (example: eth0, wlan0)")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
+    parser.add_argument(
+        "--glyphs",
+        choices=("auto", "unicode", "ascii"),
+        default="auto",
+        help="dashboard glyph set (auto selects a terminal-compatible set)",
+    )
     parser.add_argument("--once", action="store_true", help="render one snapshot and exit")
     parser.add_argument("--export", choices=["text", "json"], help="export once snapshot to file")
     parser.add_argument("--output", help="export output path for --once")
@@ -1698,8 +1978,8 @@ def parse_args():
         ),
     )
     args = parser.parse_args()
-    if args.refresh <= 0:
-        parser.error("--refresh must be greater than 0")
+    if not math.isfinite(args.refresh) or args.refresh <= 0:
+        parser.error("--refresh must be a finite value greater than 0")
     if args.export and not args.once:
         parser.error("--export requires --once")
     if args.export and not args.output:
@@ -1708,6 +1988,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    configure_glyphs(args.glyphs)
 
     if args.no_color:
         disable_colors()
@@ -1735,13 +2017,14 @@ def main():
             sys.exit(2)
 
     boot_time = psutil.boot_time()
-    state = SystemState(interface=args.interface)
+    state = SystemState(interface=args.interface, refresh_interval=args.refresh)
     if args.watch:
         prepare_event_log(state)
 
     renderer = TerminalRenderer()
 
-    psutil.cpu_percent(interval=None)
+    psutil.cpu_percent(interval=0.1, percpu=True)
+    state.pi_monitor.wait_ready()
     state.hailo_monitor.wait_ready()
 
     if not args.once:
@@ -1777,6 +2060,7 @@ def main():
     finally:
         if not args.once:
             cleanup_terminal(renderer)
+        state.pi_monitor.stop()
         state.hailo_monitor.stop()
 
 
