@@ -121,6 +121,11 @@ apt-get update
 install_packages "${BASE_PACKAGES[@]}"
 
 install_raspberry_pi_tools
+
+if ! command -v vcgencmd >/dev/null 2>&1; then
+    echo "Warning: vcgencmd is unavailable. Pi-specific telemetry will show as unavailable."
+fi
+
 install_python_requirements
 
 chmod +x "$SYSTEMPI_SCRIPT"
