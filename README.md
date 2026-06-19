@@ -57,7 +57,7 @@ systempi --variation balanced --theme wasteland
 ##### Note: `--variant` and `--var` may also be used as aliases for `--variation`.
 
 <p align="center">
-<img width="705" height="585" alt="SystempiBalancedWastelandV2 1 1" src="https://github.com/user-attachments/assets/377ad0b0-0830-4303-a428-4ea830490767" />
+<img width="706" height="586" alt="SystempiBalancedWasteland" src="https://github.com/user-attachments/assets/c0e55295-7e37-45a4-a840-fdf9a78dd8d3" />
 </p>
 
 ---
@@ -69,7 +69,7 @@ systempi --variation doctor --theme vaulttec
 ```
 
 <p align="center">
-<img width="705" height="774" alt="SystempiDoctorVaulttecV2 1 1" src="https://github.com/user-attachments/assets/a376eb0a-5936-40e6-b2c5-994598d4ee32" />
+<img width="706" height="774" alt="SystempiDoctorVaulttec" src="https://github.com/user-attachments/assets/bcbf6b21-afc4-4e97-b001-f51e3bf4b321" />
 </p>
 
 ---
@@ -81,7 +81,7 @@ systempi --variation compact --theme crt
 ```
 
 <p align="center">
-<img width="601" height="313" alt="SystempiCompactCRT" src="https://github.com/user-attachments/assets/16c3474e-9c15-4271-8f9d-fb4c6695d76b" />
+<img width="626" height="332" alt="SystempiCompactCrt" src="https://github.com/user-attachments/assets/2bf660b6-fcee-4b15-875d-999a6d9be85e" />
 </p>
 
 ---
@@ -93,7 +93,7 @@ systempi --variation minimal --theme ice
 ```
 
 <p align="center">
-<img width="593" height="247" alt="SystempiMinimalICE" src="https://github.com/user-attachments/assets/1d702f18-45b1-4961-a066-4dff613b1c00" />
+<img width="611" height="280" alt="SystempiMinimalICE" src="https://github.com/user-attachments/assets/72503e24-e71c-4e1a-ae8f-d626ef291693" />
 </p>
 
 ---
@@ -105,7 +105,7 @@ systempi --theme raspberrypi
 ```
 
 <p align="center">
-<img width="657" height="585" alt="SystempiBalancedRaspberrypiV2 1 1" src="https://github.com/user-attachments/assets/1569d749-2846-4a41-9449-c7e1c73a68b8" />
+<img width="706" height="589" alt="SystempiBalancedRaspberrypi" src="https://github.com/user-attachments/assets/3b1d02e2-37c9-4723-8276-b49bb419756b" />
 </p>
 
 ---
@@ -117,7 +117,7 @@ systempi --variation doctor --theme biohazard
 ```
 
 <p align="center">
-<img width="705" height="773" alt="SystempiDoctorBiohazardV2 1 1" src="https://github.com/user-attachments/assets/edb28211-f095-4983-88af-81f6ef0935a8" />
+<img width="706" height="775" alt="SystempiDoctorBiohazard" src="https://github.com/user-attachments/assets/99d16d21-a0e8-4445-8ed2-38479a0d1a66" />
 </p>
 
 ---
@@ -129,7 +129,7 @@ systempi --theme ocean
 ```
 
 <p align="center">
-<img width="705" height="585" alt="SystempiBalancedOceanV2 1 1" src="https://github.com/user-attachments/assets/1a1eea57-1a30-4db9-8295-0c6876be63a7" />
+<img width="706" height="588" alt="SystempiBalancedOcean" src="https://github.com/user-attachments/assets/5d3088d6-8f57-4c08-8f54-4601460afe42" />
 </p>
 
 ---
@@ -141,7 +141,7 @@ systempi --theme synthwave
 ```
 
 <p align="center">
-<img width="705" height="585" alt="SystempiBalancedSynthwaveV2 1 1" src="https://github.com/user-attachments/assets/ff95bc51-6c9b-491a-998a-06bfcbfc8061" />
+<img width="706" height="587" alt="SystempiBalancedSynthwave" src="https://github.com/user-attachments/assets/cbf5075c-760f-4ae3-99ce-fc3ebdf67dce" />
 </p>
 
 ---
