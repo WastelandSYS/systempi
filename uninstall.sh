@@ -3,14 +3,12 @@
 set -euo pipefail
 
 SYSTEMPI_BIN="/usr/local/bin/systempi"
+SYSTEMPI_LIB_DIR="/usr/local/lib/systempi"
+SYSTEMPI_INSTALLED_SCRIPT="$SYSTEMPI_LIB_DIR/systempi.py"
+SYSTEMPI_PACKAGE_STATE="$SYSTEMPI_LIB_DIR/installed-packages"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LEGACY_REPO_SCRIPT="$REPO_DIR/systempi.py"
 REMOVE_DEPS=false
-OPTIONAL_PACKAGES=(
-    python3-psutil
-    raspi-utils-core
-    raspi-utils-dt
-    raspberrypi-utils
-    libraspberrypi-bin
-)
 
 show_help() {
     cat <<HELP
@@ -80,8 +78,16 @@ safe_remove_package() {
 
 remove_shortcut() {
     if [ -L "$SYSTEMPI_BIN" ]; then
-        rm -f "$SYSTEMPI_BIN"
-        echo "Removed shortcut: $SYSTEMPI_BIN"
+        local target
+
+        target="$(readlink "$SYSTEMPI_BIN")"
+        if [ "$target" = "$SYSTEMPI_INSTALLED_SCRIPT" ] || [ "$target" = "$LEGACY_REPO_SCRIPT" ]; then
+            rm -f "$SYSTEMPI_BIN"
+            echo "Removed shortcut: $SYSTEMPI_BIN"
+        else
+            echo "Warning: $SYSTEMPI_BIN points to $target, not this SystemPi install."
+            echo "Leaving it in place so this script does not remove an unrelated command."
+        fi
     elif [ -e "$SYSTEMPI_BIN" ]; then
         echo "Warning: $SYSTEMPI_BIN exists but is not a symlink."
         echo "Leaving it in place so this script does not delete an unrelated file."
@@ -90,13 +96,35 @@ remove_shortcut() {
     fi
 }
 
+remove_installed_files() {
+    if [ -f "$SYSTEMPI_INSTALLED_SCRIPT" ]; then
+        rm -f "$SYSTEMPI_INSTALLED_SCRIPT"
+        echo "Removed installed script: $SYSTEMPI_INSTALLED_SCRIPT"
+    fi
+}
+
+remove_package_state() {
+    if [ -f "$SYSTEMPI_PACKAGE_STATE" ]; then
+        rm -f "$SYSTEMPI_PACKAGE_STATE"
+    fi
+}
+
 remove_optional_dependencies() {
     if command -v apt-get >/dev/null 2>&1; then
-        for package in "${OPTIONAL_PACKAGES[@]}"; do
-            safe_remove_package "$package"
-        done
+        local package
 
-        echo "Removed optional SystemPi dependencies."
+        if [ ! -f "$SYSTEMPI_PACKAGE_STATE" ]; then
+            echo "No SystemPi package state found. Skipping dependency removal."
+            return
+        fi
+
+        while IFS= read -r package; do
+            [ -n "$package" ] || continue
+            safe_remove_package "$package"
+        done < "$SYSTEMPI_PACKAGE_STATE"
+
+        rm -f "$SYSTEMPI_PACKAGE_STATE"
+        echo "Removed packages recorded as installed by SystemPi."
         echo "Run 'sudo apt autoremove' manually if you want to review unused packages."
     else
         echo "Warning: apt-get not found. Skipping dependency removal."
@@ -104,10 +132,15 @@ remove_optional_dependencies() {
 }
 
 remove_shortcut
+remove_installed_files
 
 if [ "$REMOVE_DEPS" = true ]; then
     remove_optional_dependencies
+else
+    remove_package_state
 fi
+
+rmdir "$SYSTEMPI_LIB_DIR" 2>/dev/null || true
 
 echo "SystemPi uninstall complete."
 echo "Your cloned repository folder was not deleted. Remove it manually if desired."
