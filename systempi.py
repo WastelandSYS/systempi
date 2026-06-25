@@ -433,6 +433,7 @@ class HailoMonitor:
 
     def _run(self):
         master = None
+        slave = None
         proc = None
         try:
             master, slave = pty.openpty()
@@ -442,6 +443,7 @@ class HailoMonitor:
                 stderr=slave,
             )
             os.close(slave)
+            slave = None
             buf = b""
             while not self._stop.is_set():
                 ready, _, _ = select.select([master], [], [], 0.2)
@@ -474,6 +476,11 @@ class HailoMonitor:
         except Exception:
             pass
         finally:
+            if slave is not None:
+                try:
+                    os.close(slave)
+                except OSError:
+                    pass
             if proc:
                 try:
                     proc.terminate()
