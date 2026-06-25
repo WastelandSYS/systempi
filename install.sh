@@ -3,9 +3,13 @@
 set -euo pipefail
 
 SYSTEMPI_BIN="/usr/local/bin/systempi"
+SYSTEMPI_LIB_DIR="/usr/local/lib/systempi"
+SYSTEMPI_INSTALLED_SCRIPT="$SYSTEMPI_LIB_DIR/systempi.py"
+SYSTEMPI_PACKAGE_STATE="$SYSTEMPI_LIB_DIR/installed-packages"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYSTEMPI_SCRIPT="$REPO_DIR/systempi.py"
 BASE_PACKAGES=(python3 python3-psutil)
+INSTALLED_BY_SYSTEMPI=()
 
 show_help() {
     cat <<HELP
@@ -76,7 +80,44 @@ package_installable() {
 }
 
 install_packages() {
+    local package
+    local before=()
+
+    for package in "$@"; do
+        if package_installed "$package"; then
+            before+=("$package")
+        fi
+    done
+
     apt-get install -y "$@"
+
+    for package in "$@"; do
+        if package_was_absent "$package" "${before[@]}" && package_installed "$package"; then
+            INSTALLED_BY_SYSTEMPI+=("$package")
+        fi
+    done
+}
+
+package_installed() {
+    local package="$1"
+    local status
+
+    status="$(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true)"
+    [ "$status" = "install ok installed" ]
+}
+
+package_was_absent() {
+    local package="$1"
+    shift
+    local installed_before
+
+    for installed_before in "$@"; do
+        if [ "$installed_before" = "$package" ]; then
+            return 1
+        fi
+    done
+
+    return 0
 }
 
 install_raspberry_pi_tools() {
@@ -128,8 +169,15 @@ fi
 
 install_python_requirements
 
-chmod +x "$SYSTEMPI_SCRIPT"
-ln -sf "$SYSTEMPI_SCRIPT" "$SYSTEMPI_BIN"
+install -d -m 755 "$SYSTEMPI_LIB_DIR"
+install -m 755 "$SYSTEMPI_SCRIPT" "$SYSTEMPI_INSTALLED_SCRIPT"
+if [ "${#INSTALLED_BY_SYSTEMPI[@]}" -gt 0 ]; then
+    printf '%s\n' "${INSTALLED_BY_SYSTEMPI[@]}" | sort -u > "$SYSTEMPI_PACKAGE_STATE"
+else
+    : > "$SYSTEMPI_PACKAGE_STATE"
+fi
+chmod 644 "$SYSTEMPI_PACKAGE_STATE"
+ln -sf "$SYSTEMPI_INSTALLED_SCRIPT" "$SYSTEMPI_BIN"
 
 echo
 echo "Installation complete!"
