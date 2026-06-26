@@ -24,7 +24,7 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Raspberry Pi hardware intelligence with model/arch/RAM/top-process insight rows
 - Doctor mode package update availability monitoring with non-blocking background checks
 - Optional Raspberry Pi AI Hat+ / AI Hat+2 Hailo telemetry monitoring with NPU load, temperature, memory, and utilization metrics
-- 14 built-in themes including matrix, wasteland, ocean, raspberrypi, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
+- 15 built-in themes including matrix, wasteland, ocean, raspberrypi, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
 - 4 dashboard variations: Balanced, Compact, Minimal, and Doctor
 - Responsive low-flicker partial terminal redraw renderer with dynamic terminal resizing
 - Keyboard shortcuts including `q` for instant dashboard exit
@@ -306,6 +306,7 @@ systempi --glyphs ascii
 - amber
 - crt
 - vaulttec
+- bubblegum
 - synthwave
 - ice
 - biohazard
