@@ -230,6 +230,17 @@ THEMES = {
         "white": "\033[97m",
         "bold_cyan": "\033[38;5;161;1m",
         "dim": "\033[2m",
+    },
+    "bubblegum": {
+        "green": "\033[38;5;218m",      # Trans Pink
+        "yellow": "\033[38;5;255m",     # White
+        "red": "\033[38;5;255m",        # White Accent
+        "cyan": "\033[38;5;123m",       # Light Blue
+        "blue": "\033[38;5;159m",       # Trans Blue
+        "magenta": "\033[38;5;225m",    # Pastel Pink
+        "white": "\033[97m",            # Bright White
+        "bold_cyan": "\033[1;38;5;123m",
+        "dim": "\033[38;5;251m",
     }
 }
 
