@@ -573,11 +573,13 @@ class PiMonitor:
 
     def __init__(self, refresh_interval=1.0):
         self._stats = (None, None, None)
+        self._last_success = (None, None, None)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._thread = None
         self.poll_interval = max(1.0, refresh_interval)
+        self.stale_after = max(5.0, self.poll_interval * 3)
         self.available = shutil.which("vcgencmd") is not None
 
     def start(self):
@@ -594,11 +596,23 @@ class PiMonitor:
 
             with self._lock:
                 previous_temp, previous_freq, previous_throttle = self._stats
+                temp_seen, freq_seen, throttle_seen = self._last_success
+                now = time.monotonic()
+                if temperature is not None:
+                    previous_temp = temperature
+                    temp_seen = now
+                if frequency is not None:
+                    previous_freq = frequency
+                    freq_seen = now
+                if throttle is not None:
+                    previous_throttle = throttle
+                    throttle_seen = now
                 self._stats = (
-                    temperature if temperature is not None else previous_temp,
-                    frequency if frequency is not None else previous_freq,
-                    throttle if throttle is not None else previous_throttle,
+                    previous_temp,
+                    previous_freq,
+                    previous_throttle,
                 )
+                self._last_success = (temp_seen, freq_seen, throttle_seen)
             self._ready.set()
 
             if self._stop.wait(self.poll_interval):
@@ -607,10 +621,22 @@ class PiMonitor:
     def get_stats(self):
         with self._lock:
             temperature, frequency, throttle = self._stats
+            temp_seen, freq_seen, throttle_seen = self._last_success
+            now = time.monotonic()
             return (
-                temperature,
-                frequency,
-                dict(throttle) if throttle is not None else None,
+                temperature
+                if temp_seen is not None and now - temp_seen <= self.stale_after
+                else None,
+                frequency
+                if freq_seen is not None and now - freq_seen <= self.stale_after
+                else None,
+                dict(throttle)
+                if (
+                    throttle is not None
+                    and throttle_seen is not None
+                    and now - throttle_seen <= self.stale_after
+                )
+                else None,
             )
 
     def wait_ready(self, timeout=1.0):
