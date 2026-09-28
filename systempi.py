@@ -49,8 +49,11 @@ PI_THERMAL_PROFILES = {
 CPU_THRESHOLD_LOW = 60
 CPU_THRESHOLD_MEDIUM = 85
 RESET = "\033[0m"
-UPDATE_CHECK_INTERVAL = 1800
+UPDATE_CHECK_INTERVAL = 300
+UPDATE_STATE_PROBE_INTERVAL = 5.0
 PROCESS_CHECK_INTERVAL = 5
+APT_DPKG_STATUS_PATH = Path("/var/lib/dpkg/status")
+APT_LISTS_PATH = Path("/var/lib/apt/lists")
 
 UNICODE_GLYPHS = {
     "top_left": "╭", "top_right": "╮", "bottom_left": "╰", "bottom_right": "╯",
@@ -305,6 +308,9 @@ class SystemState:
         self.updates_status = "Checking..."
         self.last_update_check = 0
         self.update_check_running = False
+        self.last_update_state_probe = 0.0
+        self.package_state_signature = None
+        self.update_refresh_requested = False
         self.update_lock = threading.Lock()
         self.pi_monitor = PiMonitor(refresh_interval)
         self.pi_monitor.start()
@@ -314,6 +320,37 @@ class SystemState:
 def default_log_path():
     home = Path.home()
     return home / ".local" / "state" / "systempi" / "events.log"
+
+def package_state_signature(status_path=APT_DPKG_STATUS_PATH, lists_path=APT_LISTS_PATH):
+    try:
+        status = status_path.stat()
+    except OSError:
+        return None
+
+    list_entries = []
+    try:
+        with os.scandir(lists_path) as entries:
+            for entry in entries:
+                if entry.name in ("lock", "partial"):
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        continue
+                    stat_result = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                list_entries.append((
+                    entry.name,
+                    stat_result.st_mtime_ns,
+                    stat_result.st_size,
+                ))
+    except OSError:
+        return None
+
+    return (
+        (status.st_mtime_ns, status.st_size),
+        tuple(sorted(list_entries)),
+    )
 
 def run_vcgencmd(args, stop_event=None):
     proc = None
@@ -395,15 +432,36 @@ def run_package_update_check(state):
 
 
 def refresh_package_update_status(state):
-    now = time.time()
+    now = time.monotonic()
+    should_probe = False
+
+    with state.update_lock:
+        if now - state.last_update_state_probe >= UPDATE_STATE_PROBE_INTERVAL:
+            state.last_update_state_probe = now
+            should_probe = True
+
+    if should_probe:
+        signature = package_state_signature()
+        if signature is not None:
+            with state.update_lock:
+                if state.package_state_signature is None:
+                    state.package_state_signature = signature
+                elif signature != state.package_state_signature:
+                    state.package_state_signature = signature
+                    state.update_refresh_requested = True
 
     with state.update_lock:
         if state.update_check_running:
             return
 
-        if state.last_update_check != 0 and now - state.last_update_check < UPDATE_CHECK_INTERVAL:
+        interval_elapsed = (
+            state.last_update_check == 0
+            or now - state.last_update_check >= UPDATE_CHECK_INTERVAL
+        )
+        if not interval_elapsed and not state.update_refresh_requested:
             return
 
+        state.update_refresh_requested = False
         state.last_update_check = now
         state.updates_status = "Checking..."
         state.update_check_running = True
