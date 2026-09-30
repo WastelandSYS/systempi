@@ -98,7 +98,7 @@ systempi --variation minimal --theme ice
 
 ---
 
-## Raspberrypi Theme
+## Wasteland Theme
 
 ```bash
 systempi --variation balanced --theme wasteland
