@@ -51,13 +51,13 @@ Each variation is designed for a different monitoring workflow — from lightwei
 ## Balanced Mode — Main Dashboard
 
 ```bash
-systempi --variation balanced --theme wasteland
+systempi --variation balanced --theme raspberrypi
 ```
 
 ##### Note: `--variant` and `--var` may also be used as aliases for `--variation`.
 
 <p align="center">
-<img width="706" height="586" alt="SystempiBalancedWasteland~" src="https://github.com/user-attachments/assets/7b3b3135-fca3-48f3-b01a-7c8c89ca21d8" />
+<img width="706" height="586" alt="SystempiBalancedRaspberrypi~" src="https://github.com/user-attachments/assets/1e008088-f26a-4a3e-8694-76b889102e95" />
 </p>
 
 ---
@@ -101,11 +101,11 @@ systempi --variation minimal --theme ice
 ## Raspberrypi Theme
 
 ```bash
-systempi --variation balanced --theme raspberrypi
+systempi --variation balanced --theme wasteland
 ```
 
 <p align="center">
-<img width="706" height="589" alt="SystempiBalancedRaspberrypi~" src="https://github.com/user-attachments/assets/0630da7a-ca89-4e9b-ade0-263a0571b52e" />
+<img width="706" height="589" alt="SystempiBalancedWasteland~" src="https://github.com/user-attachments/assets/ae35ed54-f916-4390-b546-b62632a5a33c" />
 </p>
 
 ---
