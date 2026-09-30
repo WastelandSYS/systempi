@@ -22,7 +22,7 @@ Real-time Raspberry Pi system monitoring dashboard for Linux terminals with live
 - Persistent alert event logging with watch/history support
 - Lightweight active alert detection for CPU, RAM, disk, temperature, and Pi power/throttle events
 - Raspberry Pi hardware intelligence with model/arch/RAM/top-process insight rows
-- Doctor mode package update availability monitoring with non-blocking background checks
+- Doctor mode package update monitoring with responsive local APT state checks and optional repository freshness checks
 - Optional Raspberry Pi AI Hat+ / AI Hat+2 Hailo telemetry monitoring with NPU load, temperature, memory, and utilization metrics
 - 15 built-in themes including matrix, wasteland, ocean, raspberrypi, mono, amber, crt, vaulttec, synthwave, ice, biohazard, and more
 - 4 dashboard variations: Balanced, Compact, Minimal, and Doctor
@@ -65,7 +65,7 @@ systempi --variation balanced --theme wasteland
 ## Doctor Mode — Diagnostic, Alert & System Insight
 
 ```bash
-systempi --variation doctor --theme vaulttec
+systempi --variation doctor --repo-check --theme vaulttec
 ```
 
 <p align="center">
@@ -101,7 +101,7 @@ systempi --variation minimal --theme ice
 ## Raspberrypi Theme
 
 ```bash
-systempi --theme raspberrypi
+systempi --variation balanced --theme raspberrypi
 ```
 
 <p align="center">
@@ -125,7 +125,7 @@ systempi --variation doctor --theme biohazard
 ## Ocean Theme
 
 ```bash
-systempi --theme ocean
+systempi --variation balanced --theme ocean
 ```
 
 <p align="center">
@@ -137,7 +137,7 @@ systempi --theme ocean
 ## Synthwave Theme
 
 ```bash
-systempi --theme synthwave
+systempi --variation doctor --theme synthwave
 ```
 
 <p align="center">
@@ -219,6 +219,18 @@ Doctor mode (diagnostic-focused):
 ```bash
 systempi --variation doctor
 ```
+
+Doctor mode with optional repository freshness checking:
+
+```bash
+systempi --variation doctor --repo-check
+```
+
+Doctor mode refreshes its normal `Updates` count when local package state changes. The count still comes from `apt list --upgradable`; SystemPi only uses package-state changes as a trigger to ask APT again. This requires no sudo/root access and does not install, remove, or upgrade packages.
+
+`--repo-check` is opt-in and only valid with Doctor mode. It contacts the APT repositories already configured on the machine, stores isolated user-owned metadata under ~/.cache/systempi/apt/, and refreshes asynchronously every three hours without modifying the system APT cache.
+
+`Updates` means updates currently known to the machine's normal APT metadata. `Repo` means the result from SystemPi's optional private repository freshness check. For example, `Updates 8 available` and `Repo 9 available` means the system currently knows about 8 available updates, while the isolated repository check sees 9 total available packages.
 
 Once + export snapshot:
 
@@ -331,6 +343,7 @@ Notes:
 - Raspberry Pi hardware metrics require `vcgencmd`.
 - General system metrics require `psutil`, which is installed by `install.sh`.
 - Raspberry Pi AI Hat+ / AI Hat+2 telemetry is automatically detected when the Hailo software stack and `hailortcli` are available.
+- Optional `--repo-check` support is intended for Debian/APT-based systems and uses the user's configured APT repositories.
 - Non-Raspberry Pi systems can still provide standard CPU, memory, disk, and network metrics, but Pi-specific temperature, frequency, and throttling telemetry may show as unavailable.
 ---
 

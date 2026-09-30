@@ -9,6 +9,8 @@
 # =========================================================
 
 import argparse
+import fcntl
+import hashlib
 import json
 import math
 import os
@@ -16,6 +18,7 @@ import platform
 import pty
 import re
 import select
+import signal
 import shutil
 import subprocess
 import sys
@@ -30,7 +33,7 @@ from pathlib import Path
 import psutil
 
 # Constants
-SYSTEMPI_VERSION = "2.1.2"
+SYSTEMPI_VERSION = "2.2.0"
 # Fallback thermal thresholds used when no model-specific profile is available.
 TEMP_WARNING = 60
 TEMP_CRITICAL = 75
@@ -51,9 +54,21 @@ CPU_THRESHOLD_MEDIUM = 85
 RESET = "\033[0m"
 UPDATE_CHECK_INTERVAL = 300
 UPDATE_STATE_PROBE_INTERVAL = 5.0
+REPO_CHECK_INTERVAL = 3 * 60 * 60
+REPO_CHECK_RETRY_INTERVAL = 30 * 60
+REPO_CHECK_BUSY_RETRY_INTERVAL = 60
+REPO_CHECK_TIMEOUT = 120
+REPO_REFRESH_SUCCESS = "success"
+REPO_REFRESH_FAILURE = "failure"
+REPO_REFRESH_BUSY = "busy"
+REPO_REFRESH_NEEDED = "refresh_needed"
 PROCESS_CHECK_INTERVAL = 5
 APT_DPKG_STATUS_PATH = Path("/var/lib/dpkg/status")
 APT_LISTS_PATH = Path("/var/lib/apt/lists")
+APT_SOURCES_LIST_PATH = Path("/etc/apt/sources.list")
+APT_SOURCES_LIST_D_PATH = Path("/etc/apt/sources.list.d")
+APT_TRUSTED_GPG_PATH = Path("/etc/apt/trusted.gpg")
+APT_TRUSTED_GPG_D_PATH = Path("/etc/apt/trusted.gpg.d")
 
 UNICODE_GLYPHS = {
     "top_left": "╭", "top_right": "╮", "bottom_left": "╰", "bottom_right": "╯",
@@ -277,7 +292,7 @@ def configure_glyphs(mode="auto"):
     GLYPHS = selected.copy()
 
 class SystemState:
-    def __init__(self, interface=None, refresh_interval=1.0):
+    def __init__(self, interface=None, refresh_interval=1.0, repo_check=False):
         self.prev_sent = 0
         self.prev_recv = 0
         self.prev_disk_read = 0
@@ -316,6 +331,9 @@ class SystemState:
         self.pi_monitor.start()
         self.hailo_monitor = HailoMonitor()
         self.hailo_monitor.start()
+        self.repo_check_monitor = RepoCheckMonitor() if repo_check else None
+        if self.repo_check_monitor:
+            self.repo_check_monitor.start()
 
 def default_log_path():
     home = Path.home()
@@ -351,6 +369,702 @@ def package_state_signature(status_path=APT_DPKG_STATUS_PATH, lists_path=APT_LIS
         (status.st_mtime_ns, status.st_size),
         tuple(sorted(list_entries)),
     )
+
+
+def run_text_command(args, timeout=10):
+    result = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"command failed: {args[0]}")
+    return result.stdout
+
+
+def determine_relevant_apt_architectures(command_runner=run_text_command):
+    native = command_runner(["dpkg", "--print-architecture"]).strip()
+    foreign = [
+        line.strip()
+        for line in command_runner(["dpkg", "--print-foreign-architectures"]).splitlines()
+        if line.strip()
+    ]
+
+    try:
+        installed_arches = {
+            line.strip()
+            for line in command_runner(["dpkg-query", "-W", "-f=${Architecture}\\n"]).splitlines()
+            if line.strip()
+        }
+    except Exception:
+        installed_arches = None
+
+    architectures = [native]
+    for arch in foreign:
+        if installed_arches is None or arch in installed_arches:
+            architectures.append(arch)
+    return list(dict.fromkeys(architectures))
+
+
+def iter_source_config_files(
+    sources_list=None,
+    sources_dir=None,
+    trusted_gpg=None,
+    trusted_dir=None,
+):
+    sources_list = sources_list or APT_SOURCES_LIST_PATH
+    sources_dir = sources_dir or APT_SOURCES_LIST_D_PATH
+    trusted_gpg = trusted_gpg or APT_TRUSTED_GPG_PATH
+    trusted_dir = trusted_dir or APT_TRUSTED_GPG_D_PATH
+    if sources_list.exists():
+        yield sources_list
+    if sources_dir.exists():
+        for pattern in ("*.list", "*.sources"):
+            for path in sorted(sources_dir.glob(pattern)):
+                if path.is_file():
+                    yield path
+    if trusted_gpg.exists():
+        yield trusted_gpg
+    if trusted_dir.exists():
+        for path in sorted(trusted_dir.iterdir()):
+            if path.is_file():
+                yield path
+
+
+def signed_by_paths_from_text(text):
+    paths = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("signed-by:"):
+            for token in stripped.split(":", 1)[1].split():
+                if token.startswith("/"):
+                    paths.add(Path(token))
+        for match in re.finditer(r"(?i)signed-by=([^\]\s]+)", stripped):
+            value = match.group(1).strip()
+            if value.startswith("/"):
+                paths.add(Path(value))
+    return paths
+
+
+def hash_file_into(digest, path):
+    digest.update(str(path).encode("utf-8", errors="surrogateescape"))
+    digest.update(b"\0")
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    digest.update(b"\0")
+
+
+def source_configuration_signature(architectures):
+    digest = hashlib.sha256()
+    digest.update(",".join(architectures).encode("utf-8"))
+    digest.update(b"\0")
+
+    paths = set(iter_source_config_files())
+    for path in list(paths):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        paths.update(signed_by_paths_from_text(text))
+
+    for path in sorted(paths, key=lambda item: str(item)):
+        try:
+            if path.is_file():
+                hash_file_into(digest, path)
+        except OSError:
+            return None
+    return digest.hexdigest()
+
+
+def repo_check_cache_root():
+    return Path.home() / ".cache" / "systempi" / "apt"
+
+
+def repo_status_from_count(count):
+    return "Up to date" if count == 0 else f"{count} available"
+
+
+def parse_utc_timestamp(value):
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def format_repo_age(success_utc, now=None):
+    parsed = parse_utc_timestamp(success_utc)
+    if parsed is None:
+        return "unknown"
+    now = now or datetime.now(timezone.utc)
+    seconds = max(0, int((now - parsed).total_seconds()))
+    if seconds < 3600:
+        return f"{max(1, seconds // 60)}m"
+    return f"{seconds // 3600}h"
+
+
+def repo_cached_status(count, success_utc):
+    return f"{count} cached, {format_repo_age(success_utc)} old"
+
+
+def atomic_write_json(path, payload):
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{time.monotonic_ns()}")
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp_path, path)
+
+
+def load_repo_result(generation_path):
+    try:
+        with open(generation_path / "result.json", "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if payload.get("schema") != 1:
+        return None
+    count = payload.get("update_count")
+    if not isinstance(count, int) or count < 0:
+        return None
+    if parse_utc_timestamp(payload.get("success_utc", "")) is None:
+        return None
+    signature = payload.get("source_signature")
+    architectures = payload.get("architectures")
+    if not isinstance(signature, str) or not isinstance(architectures, list):
+        return None
+    if not all(isinstance(arch, str) for arch in architectures):
+        return None
+    return payload
+
+
+def current_generation_path(cache_root):
+    marker = cache_root / "current"
+    try:
+        target = os.readlink(marker)
+    except OSError:
+        return None
+    path = (cache_root / target).resolve()
+    generations = (cache_root / "generations").resolve()
+    try:
+        path.relative_to(generations)
+    except ValueError:
+        return None
+    return path if path.is_dir() else None
+
+
+def ensure_generation_layout(generation_path):
+    for path in (
+        generation_path / "state" / "lists" / "partial",
+        generation_path / "cache" / "archives" / "partial",
+        generation_path / "etc" / "apt.conf.d",
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+
+
+def repo_generation_matches(generation_path, source_signature, architectures):
+    result = load_repo_result(generation_path)
+    return (
+        result is not None
+        and result["source_signature"] == source_signature
+        and result["architectures"] == architectures
+    )
+
+
+def copy_repo_list_tree(source_path, destination_path):
+    destination_path.mkdir(parents=True, exist_ok=True)
+    try:
+        entries = list(os.scandir(source_path))
+    except OSError:
+        return
+
+    for entry in entries:
+        if entry.name in ("lock", "partial"):
+            continue
+        destination_entry = destination_path / entry.name
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                copy_repo_list_tree(Path(entry.path), destination_entry)
+            elif entry.is_file(follow_symlinks=False):
+                shutil.copy2(entry.path, destination_entry, follow_symlinks=False)
+        except OSError:
+            continue
+
+
+def seed_generation_lists(source_generation, staging_generation):
+    source_lists = source_generation / "state" / "lists"
+    staging_lists = staging_generation / "state" / "lists"
+    if not source_lists.is_dir():
+        return False
+
+    copy_repo_list_tree(source_lists, staging_lists)
+    partial_path = staging_lists / "partial"
+    shutil.rmtree(partial_path, ignore_errors=True)
+    partial_path.mkdir(parents=True, exist_ok=True)
+    lock_path = staging_lists / "lock"
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def write_repo_apt_config(generation_path, architectures):
+    apt_conf = generation_path / "etc" / "apt.conf"
+    lines = [
+        "#clear APT::Update::Post-Invoke-Success;",
+        "#clear APT::Update::Post-Invoke;",
+        "#clear DPkg::Post-Invoke;",
+        "#clear DPkg::Pre-Install-Pkgs;",
+        "#clear APT::Architectures;",
+        f'APT::Architecture "{architectures[0]}";',
+        "APT::Architectures {",
+    ]
+    lines.extend(f'    "{arch}";' for arch in architectures)
+    lines.extend([
+        "};",
+        'Acquire::Languages { "none"; };',
+        'Acquire::GzipIndexes "true";',
+        'Dir::Cache::pkgcache "";',
+        'Dir::Cache::srcpkgcache "";',
+        'APT::Sandbox::User "";',
+        'APT::Update::Error-Mode "any";',
+    ])
+    apt_conf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return apt_conf
+
+
+def repo_apt_options(generation_path):
+    apt_conf = generation_path / "etc" / "apt.conf"
+    return [
+        "-c", str(apt_conf),
+        "-o", f"Dir::State={generation_path / 'state'}",
+        "-o", "Dir::State::lists=lists",
+        "-o", f"Dir::Cache={generation_path / 'cache'}",
+        "-o", "Dir::Cache::archives=archives",
+        "-o", f"Dir::State::status={APT_DPKG_STATUS_PATH}",
+        "-o", f"Dir::Etc::sourcelist={APT_SOURCES_LIST_PATH}",
+        "-o", f"Dir::Etc::sourceparts={APT_SOURCES_LIST_D_PATH}",
+        "-o", f"Dir::Etc::parts={generation_path / 'etc' / 'apt.conf.d'}",
+        "-o", f"Dir::Etc::trusted={APT_TRUSTED_GPG_PATH}",
+        "-o", f"Dir::Etc::trustedparts={APT_TRUSTED_GPG_D_PATH}",
+    ]
+
+
+def repo_apt_update_command(generation_path):
+    return ["apt-get"] + repo_apt_options(generation_path) + ["update"]
+
+
+def repo_apt_list_command(generation_path):
+    return ["apt"] + repo_apt_options(generation_path) + ["list", "--upgradable"]
+
+
+def terminate_process_group(proc):
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        try:
+            proc.terminate()
+        except OSError:
+            return
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        proc.wait()
+
+
+def run_repo_process(args, stop_event, timeout):
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    cancelled = False
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=0.2)
+            return proc.returncode, stdout, stderr, timed_out, cancelled
+        except subprocess.TimeoutExpired:
+            if stop_event.is_set():
+                cancelled = True
+                terminate_process_group(proc)
+                stdout, stderr = proc.communicate()
+                return proc.returncode, stdout, stderr, timed_out, cancelled
+            if time.monotonic() >= deadline:
+                timed_out = True
+                terminate_process_group(proc)
+                stdout, stderr = proc.communicate()
+                return proc.returncode, stdout, stderr, timed_out, cancelled
+
+
+class RepoCheckMonitor:
+    """Refresh private repository metadata for optional Doctor repo checks."""
+
+    def __init__(
+        self,
+        cache_root=None,
+        interval=REPO_CHECK_INTERVAL,
+        retry_interval=REPO_CHECK_RETRY_INTERVAL,
+        timeout=REPO_CHECK_TIMEOUT,
+        command_runner=run_repo_process,
+    ):
+        self.cache_root = cache_root or repo_check_cache_root()
+        self.interval = interval
+        self.retry_interval = retry_interval
+        self.timeout = timeout
+        self.command_runner = command_runner
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread = None
+        self._count = None
+        self._success_utc = None
+        self._had_failure = False
+        self._status = "Checking..."
+        self._refreshing = False
+        self._local_recount_requested = False
+        self._architectures = []
+        self._source_signature = None
+        self._load_initial_state()
+
+    def _load_initial_state(self):
+        try:
+            self._architectures = determine_relevant_apt_architectures()
+            self._source_signature = source_configuration_signature(self._architectures)
+            result = self._load_current_result()
+        except Exception:
+            result = None
+
+        if result:
+            with self._lock:
+                self._count = result["update_count"]
+                self._success_utc = result["success_utc"]
+                self._status = repo_status_from_count(self._count)
+
+    def _load_current_result(self):
+        generation = current_generation_path(self.cache_root)
+        if generation is None:
+            return None
+        result = load_repo_result(generation)
+        if not result:
+            return None
+        if result["source_signature"] != self._source_signature:
+            return None
+        if result["architectures"] != self._architectures:
+            return None
+        return result
+
+    def start(self):
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        (self.cache_root / "generations").mkdir(parents=True, exist_ok=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def get_status(self):
+        with self._lock:
+            if self._refreshing:
+                return "Checking..."
+            if self._count is None:
+                return self._status
+            if self._had_failure:
+                return repo_cached_status(self._count, self._success_utc)
+            parsed = parse_utc_timestamp(self._success_utc)
+            if parsed is not None:
+                age = (datetime.now(timezone.utc) - parsed).total_seconds()
+                if age > self.interval:
+                    return repo_cached_status(self._count, self._success_utc)
+            return repo_status_from_count(self._count)
+
+    def stop(self):
+        self._stop.set()
+        self._wake.set()
+        if self._thread:
+            self._thread.join(timeout=3)
+
+    def request_local_recount(self):
+        with self._lock:
+            self._local_recount_requested = True
+        self._wake.set()
+
+    def _run(self):
+        next_refresh_at = time.monotonic()
+        next_recount_at = None
+        while not self._stop.is_set():
+            now = time.monotonic()
+            wake_at = next_refresh_at
+            with self._lock:
+                recount_requested = self._local_recount_requested
+            if recount_requested:
+                wake_at = min(wake_at, next_recount_at or now)
+
+            self._wake.wait(max(0, wake_at - now))
+            self._wake.clear()
+            if self._stop.is_set():
+                break
+
+            now = time.monotonic()
+            if now >= next_refresh_at:
+                with self._lock:
+                    self._refreshing = True
+                    self._local_recount_requested = False
+                    if self._count is None:
+                        self._status = "Checking..."
+                result = self._refresh_once()
+                with self._lock:
+                    self._refreshing = False
+                    if result == REPO_REFRESH_SUCCESS:
+                        self._had_failure = False
+                        next_refresh_at = time.monotonic() + self.interval
+                    elif result == REPO_REFRESH_BUSY:
+                        next_refresh_at = time.monotonic() + min(REPO_CHECK_BUSY_RETRY_INTERVAL, self.retry_interval)
+                    else:
+                        self._had_failure = True
+                        if self._count is None:
+                            self._status = "Check failed"
+                        next_refresh_at = time.monotonic() + self.retry_interval
+                next_recount_at = None
+                continue
+
+            with self._lock:
+                recount_requested = self._local_recount_requested
+                if recount_requested:
+                    self._local_recount_requested = False
+
+            if recount_requested and (next_recount_at is None or now >= next_recount_at):
+                with self._lock:
+                    self._refreshing = True
+                result = self._recount_current_generation()
+                with self._lock:
+                    self._refreshing = False
+                    if result == REPO_REFRESH_BUSY:
+                        self._local_recount_requested = True
+                if result == REPO_REFRESH_BUSY:
+                    next_recount_at = time.monotonic() + min(REPO_CHECK_BUSY_RETRY_INTERVAL, self.retry_interval)
+                elif result == REPO_REFRESH_NEEDED:
+                    next_refresh_at = time.monotonic()
+                    next_recount_at = None
+                    self._wake.set()
+                else:
+                    next_recount_at = None
+
+    def _acquire_refresh_lock(self):
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        lock_file = open(self.cache_root / "repo-check.lock", "a", encoding="utf-8")
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock_file.close()
+            return None
+        return lock_file
+
+    def _recount_current_generation(self):
+        if shutil.which("apt") is None:
+            return REPO_REFRESH_FAILURE
+
+        lock_file = self._acquire_refresh_lock()
+        if lock_file is None:
+            return REPO_REFRESH_BUSY
+
+        try:
+            generation_path = current_generation_path(self.cache_root)
+            if generation_path is None:
+                return REPO_REFRESH_FAILURE
+
+            result = load_repo_result(generation_path)
+            if not result:
+                return REPO_REFRESH_FAILURE
+
+            architectures = determine_relevant_apt_architectures()
+            source_signature = source_configuration_signature(architectures)
+            if not source_signature:
+                return REPO_REFRESH_FAILURE
+
+            if (
+                result["source_signature"] != source_signature
+                or result["architectures"] != architectures
+            ):
+                with self._lock:
+                    self._count = None
+                    self._success_utc = None
+                    self._had_failure = False
+                    self._status = "Checking..."
+                    self._architectures = architectures
+                    self._source_signature = source_signature
+                return REPO_REFRESH_NEEDED
+
+            list_rc, stdout, _, timed_out, cancelled = self.command_runner(
+                repo_apt_list_command(generation_path),
+                self._stop,
+                self.timeout,
+            )
+            if list_rc != 0 or timed_out or cancelled:
+                return REPO_REFRESH_FAILURE
+
+            upgradable = [
+                line for line in stdout.splitlines()
+                if line and not line.startswith("Listing") and "/" in line
+            ]
+            updated_result = dict(result)
+            updated_result["update_count"] = len(upgradable)
+            atomic_write_json(generation_path / "result.json", updated_result)
+
+            with self._lock:
+                self._architectures = architectures
+                self._source_signature = source_signature
+                self._count = updated_result["update_count"]
+                self._success_utc = updated_result["success_utc"]
+                self._status = repo_status_from_count(self._count)
+            return REPO_REFRESH_SUCCESS
+        except Exception:
+            return REPO_REFRESH_FAILURE
+        finally:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
+
+    def _refresh_once(self):
+        if shutil.which("apt-get") is None or shutil.which("apt") is None:
+            return REPO_REFRESH_FAILURE
+
+        lock_file = self._acquire_refresh_lock()
+        if lock_file is None:
+            return REPO_REFRESH_BUSY
+
+        generation_path = None
+        generation_finalized = False
+        previous_path = current_generation_path(self.cache_root)
+        try:
+            architectures = determine_relevant_apt_architectures()
+            source_signature = source_configuration_signature(architectures)
+            if not source_signature:
+                return REPO_REFRESH_FAILURE
+
+            with self._lock:
+                config_changed = (
+                    self._count is not None
+                    and (
+                        self._source_signature != source_signature
+                        or self._architectures != architectures
+                    )
+                )
+                if config_changed:
+                    self._count = None
+                    self._success_utc = None
+                    self._had_failure = False
+                    self._status = "Checking..."
+                self._architectures = architectures
+                self._source_signature = source_signature
+
+            seed_from_previous = (
+                previous_path is not None
+                and repo_generation_matches(previous_path, source_signature, architectures)
+            )
+
+            generations = self.cache_root / "generations"
+            generations.mkdir(parents=True, exist_ok=True)
+            generation_id = (
+                datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                + f"-{os.getpid()}-{time.monotonic_ns()}"
+            )
+            generation_path = generations / generation_id
+            ensure_generation_layout(generation_path)
+            if seed_from_previous:
+                seed_generation_lists(previous_path, generation_path)
+            write_repo_apt_config(generation_path, architectures)
+
+            update_rc, _, _, timed_out, cancelled = self.command_runner(
+                repo_apt_update_command(generation_path),
+                self._stop,
+                self.timeout,
+            )
+            if update_rc != 0 or timed_out or cancelled:
+                return REPO_REFRESH_FAILURE
+
+            list_rc, stdout, _, timed_out, cancelled = self.command_runner(
+                repo_apt_list_command(generation_path),
+                self._stop,
+                self.timeout,
+            )
+            if list_rc != 0 or timed_out or cancelled:
+                return REPO_REFRESH_FAILURE
+
+            upgradable = [
+                line for line in stdout.splitlines()
+                if line and not line.startswith("Listing") and "/" in line
+            ]
+            success_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            result = {
+                "schema": 1,
+                "success_utc": success_utc,
+                "update_count": len(upgradable),
+                "source_signature": source_signature,
+                "architectures": architectures,
+            }
+            atomic_write_json(generation_path / "result.json", result)
+            self._switch_current_generation(generation_path)
+            generation_finalized = True
+            self._prune_generations(current=generation_path, previous=previous_path)
+            with self._lock:
+                self._architectures = architectures
+                self._source_signature = source_signature
+                self._count = result["update_count"]
+                self._success_utc = success_utc
+                self._status = repo_status_from_count(self._count)
+            return REPO_REFRESH_SUCCESS
+        except Exception:
+            return REPO_REFRESH_FAILURE
+        finally:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_file.close()
+            if generation_path is not None and not generation_finalized:
+                shutil.rmtree(generation_path, ignore_errors=True)
+
+    def _switch_current_generation(self, generation_path):
+        relative_target = Path("generations") / generation_path.name
+        tmp_link = self.cache_root / f"current.tmp.{os.getpid()}.{time.monotonic_ns()}"
+        os.symlink(relative_target, tmp_link)
+        os.replace(tmp_link, self.cache_root / "current")
+
+    def _prune_generations(self, current=None, previous=None):
+        keep = {path.name for path in (current, previous) if path is not None}
+        generations = self.cache_root / "generations"
+        try:
+            entries = list(generations.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name not in keep and entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+
 
 def run_vcgencmd(args, stop_event=None):
     proc = None
@@ -434,6 +1148,7 @@ def run_package_update_check(state):
 def refresh_package_update_status(state):
     now = time.monotonic()
     should_probe = False
+    package_state_changed = False
 
     with state.update_lock:
         if now - state.last_update_state_probe >= UPDATE_STATE_PROBE_INTERVAL:
@@ -449,6 +1164,10 @@ def refresh_package_update_status(state):
                 elif signature != state.package_state_signature:
                     state.package_state_signature = signature
                     state.update_refresh_requested = True
+                    package_state_changed = True
+
+    if package_state_changed and state.repo_check_monitor:
+        state.repo_check_monitor.request_local_recount()
 
     with state.update_lock:
         if state.update_check_running:
@@ -1859,14 +2578,28 @@ def render_dashboard(metrics, state, view, refresh_interval):
         active_alerts = metrics.get("active_alerts", [])
         alert_text = ", ".join(active_alerts[:3]) if active_alerts else "none"
 
+        repo_label = ""
+        repo_status = ""
+        if state.repo_check_monitor:
+            repo_label = "Repo"
+            repo_status = state.repo_check_monitor.get_status()
+
         doctor_pairs = [
             ("Cooling", metrics["cooling_status"], "Power", metrics["power_stability"]),
             ("Workload", metrics["workload_profile"], "Storage", metrics["storage_insight"]),
             ("System", f"{format_pi_model_display(metrics['pi_model'])} [{metrics['thermal_profile_name']}]", "Arch", metrics["architecture"]),
             ("RAM", f"{metrics['total_ram_gb']:.1f} GiB", "Updates", metrics["updates_status"]),
-            ("Top CPU", metrics["top_cpu_process"], "Alerts", alert_text),
-            ("Top RAM", metrics["top_mem_process"], "", ""),
-        ]   
+        ]
+        if state.repo_check_monitor:
+            doctor_pairs.extend([
+                ("Top CPU", metrics["top_cpu_process"], repo_label, repo_status),
+                ("Top RAM", metrics["top_mem_process"], "Alerts", alert_text),
+            ])
+        else:
+            doctor_pairs.extend([
+                ("Top CPU", metrics["top_cpu_process"], "Alerts", alert_text),
+                ("Top RAM", metrics["top_mem_process"], "", ""),
+            ])
         two_column_pairs = [pair for pair in doctor_pairs if pair[2] or pair[3]]
         left_lengths = [len(f"{label:<9} {value}") for label, value, _, _ in two_column_pairs]
         right_lengths = [len(f"{label:<9} {value}") for _, _, label, value in two_column_pairs]
@@ -2065,6 +2798,11 @@ def parse_args():
     parser.add_argument("--once", action="store_true", help="render one snapshot and exit")
     parser.add_argument("--export", choices=["text", "json"], help="export once snapshot to file")
     parser.add_argument("--output", help="export output path for --once")
+    parser.add_argument(
+        "--repo-check",
+        action="store_true",
+        help="doctor mode only: check configured repositories using a private user cache",
+    )
     parser.add_argument("--watch", action="store_true", help="enable background alert event logging")
     parser.add_argument("--history", action="store_true", help="print recent alert event history and exit")
     parser.add_argument(
@@ -2086,6 +2824,10 @@ def parse_args():
         parser.error("--export requires --once")
     if args.export and not args.output:
         parser.error("--output is required when using --export")
+    if args.repo_check and args.variation != "doctor":
+        parser.error("--repo-check requires --variation doctor")
+    if args.repo_check and args.once:
+        parser.error("--repo-check cannot be used with --once")
     return args
 
 def main():
@@ -2119,7 +2861,7 @@ def main():
             sys.exit(2)
 
     boot_time = psutil.boot_time()
-    state = SystemState(interface=args.interface, refresh_interval=args.refresh)
+    state = SystemState(interface=args.interface, refresh_interval=args.refresh, repo_check=args.repo_check)
     if args.watch:
         prepare_event_log(state)
 
@@ -2162,6 +2904,8 @@ def main():
     finally:
         if not args.once:
             cleanup_terminal(renderer)
+        if state.repo_check_monitor:
+            state.repo_check_monitor.stop()
         state.pi_monitor.stop()
         state.hailo_monitor.stop()
 
