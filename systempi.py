@@ -1597,13 +1597,21 @@ def sparkline(values, width=24, fixed_min=None, fixed_max=None):
     color = severity_color(avg, 80, 50, inverse=True)
     return colorize("".join(points), color)
 
+def terminal_title_sequences(variation):
+    # Save/restore both window and icon titles using the xterm title stack.
+    # Unsupported terminal emulators can harmlessly ignore these sequences.
+    title = "SystemPi"
+    return f"\033[22;0t\033]0;{title}\007", "\033[23;0t"
+
 class TerminalRenderer:
-    def __init__(self):
+    def __init__(self, variation="balanced"):
         self.previous_lines = []
         self.enabled = sys.stdout.isatty()
         self.input_enabled = sys.stdin.isatty()
         self.last_terminal_size = None
         self.original_stdin_attrs = None
+        self.title_sequences = terminal_title_sequences(variation)
+        self.title_active = False
 
     def start(self):
         if not self.enabled:
@@ -1615,6 +1623,13 @@ class TerminalRenderer:
         # avoids repainting over the user's prompt while the dashboard is live.
         sys.stdout.write("\033[?1049h\033[?25l\033[H\033[2J")
         sys.stdout.flush()
+        if not self.title_active and os.environ.get("TERM") not in ("dumb", "linux"):
+            try:
+                sys.stdout.write(self.title_sequences[0])
+                sys.stdout.flush()
+                self.title_active = True
+            except (OSError, UnicodeError):
+                pass
 
     def render(self, frame):
         if not self.enabled:
@@ -1680,6 +1695,13 @@ class TerminalRenderer:
             return
         sys.stdout.write("\033[?25h\033[?1049l")
         sys.stdout.flush()
+        if self.title_active:
+            self.title_active = False
+            try:
+                sys.stdout.write(self.title_sequences[1])
+                sys.stdout.flush()
+            except (OSError, UnicodeError):
+                pass
 
 def cleanup_terminal(renderer=None):
     if renderer:
@@ -2865,16 +2887,15 @@ def main():
     if args.watch:
         prepare_event_log(state)
 
-    renderer = TerminalRenderer()
+    renderer = TerminalRenderer(view["mode"])
 
     psutil.cpu_percent(interval=0.1, percpu=True)
     state.pi_monitor.wait_ready()
     state.hailo_monitor.wait_ready()
 
-    if not args.once:
-        renderer.start()
-
     try:
+        if not args.once:
+            renderer.start()
         while True:
             metrics = collect_metrics(state, boot_time)
             metrics["active_alerts"] = evaluate_alerts(metrics)
